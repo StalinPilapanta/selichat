@@ -1,0 +1,1 @@
+ALTER TABLE "prompts" ADD COLUMN "variables" jsonb DEFAULT '{}'::jsonb NOT NULL;

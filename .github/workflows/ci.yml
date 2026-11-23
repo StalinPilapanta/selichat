@@ -1,0 +1,35 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env: { POSTGRES_USER: chatea, POSTGRES_PASSWORD: chatea, POSTGRES_DB: chatea }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U chatea" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://chatea_app:chatea_app@localhost:5432/chatea
+      MIGRATION_DATABASE_URL: postgres://chatea:chatea@localhost:5432/chatea
+      ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret-1234
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Crear rol de la app
+        run: |
+          docker exec -e APP_DB_PASSWORD=chatea_app -i ${{ job.services.postgres.id }} \
+            sh -c 'POSTGRES_USER=chatea POSTGRES_DB=chatea sh' < infra/postgres/init.sh
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm db:migrate
+      - run: pnpm test

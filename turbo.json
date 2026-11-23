@@ -1,0 +1,13 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalEnv": ["NODE_ENV"],
+  "tasks": {
+    "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**", "!.next/cache/**"] },
+    "typecheck": { "dependsOn": ["^build"] },
+    "test": {
+      "dependsOn": ["^build"],
+      "env": ["DATABASE_URL", "MIGRATION_DATABASE_URL", "ENCRYPTION_KEY", "BETTER_AUTH_SECRET"]
+    },
+    "dev": { "cache": false, "persistent": true }
+  }
+}
