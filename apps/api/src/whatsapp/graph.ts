@@ -69,6 +69,11 @@ export class Graph {
     return data as T;
   }
 
+  /** Suscribe la app a los webhooks de la WABA (sin esto Meta no envía mensajes reales). */
+  subscribeApp(wabaId: string) {
+    return this.call<{ success: boolean }>("POST", `${wabaId}/subscribed_apps`);
+  }
+
   phoneNumber(phoneNumberId: string) {
     return this.call<{
       id: string;

@@ -241,7 +241,9 @@ export async function whatsappRoutes(
         const [ch] = await tx.select().from(channels).where(eq(channels.id, req.params.id));
         if (!ch) return reply.code(404).send();
         try {
-          const info = await graphFor(ch, wa).phoneNumber(ch.phoneNumberId);
+          const graph = graphFor(ch, wa);
+          const info = await graph.phoneNumber(ch.phoneNumberId);
+          await graph.subscribeApp(ch.wabaId);
           const [row] = await tx
             .update(channels)
             .set({
