@@ -57,17 +57,15 @@ Si agregas una tabla de tenant, súmala a `TENANT_TABLES` y al arreglo de la mig
 
 1. En Coolify: **New Resource → Docker Compose**, apuntando a este repo y al archivo `docker-compose.prod.yml`.
 2. Asigna el dominio solo al servicio `web` (puerto 3100). El API no se expone: el navegador lo alcanza por `/api/*` a través de la web.
-3. Variables de entorno:
+3. Variables de entorno: **los secretos los genera Coolify solo** (variables mágicas `SERVICE_PASSWORD_*` en `docker-compose.prod.yml`) y la URL pública sale del dominio del servicio `web` (`SERVICE_URL_WEB`). Opcionales:
 
-| Variable                                                                      | Valor                                                                                            |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `WEB_URL`                                                                     | `https://tu-dominio`                                                                             |
-| `POSTGRES_PASSWORD`                                                           | contraseña larga aleatoria (usuario dueño, migraciones)                                          |
-| `APP_DB_PASSWORD`                                                             | otra contraseña larga aleatoria (usuario de la app)                                              |
-| `ENCRYPTION_KEY`                                                              | `openssl rand -base64 32`. **Guárdala bien: si se pierde, no se pueden descifrar los secretos.** |
-| `BETTER_AUTH_SECRET`                                                          | `openssl rand -base64 32`                                                                        |
-| `SMTP_URL`, `EMAIL_FROM`                                                      | para enviar invitaciones y enlaces mágicos                                                       |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `NEXT_PUBLIC_GOOGLE_ENABLED=true` | opcional, login con Google (callback: `https://tu-dominio/api/auth/callback/google`)             |
+| Variable | Valor |
+|---|---|
+| `SMTP_URL`, `EMAIL_FROM` | para enviar invitaciones y enlaces mágicos |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `NEXT_PUBLIC_GOOGLE_ENABLED=true` | login con Google (callback: `https://tu-dominio/api/auth/callback/google`) |
+| `WHATSAPP_GRAPH_VERSION` | versión de la Graph API de Meta (por defecto `v23.0`) |
+
+> ⚠️ No borres ni regeneres `SERVICE_PASSWORD_64_ENCRYPTION` en Coolify: con ella se cifran las API keys y tokens guardados; si cambia, no se pueden descifrar.
 
 El contenedor del API aplica las migraciones pendientes cada vez que arranca.
 

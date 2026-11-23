@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 /**
  * Cifrado de secretos de integraciones (tokens de Dropi, API keys de IA, etc.)
@@ -7,12 +7,19 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
  */
 const VERSION = "v1";
 
-function loadKey(base64Key: string): Buffer {
-  const key = Buffer.from(base64Key, "base64");
-  if (key.length !== 32) {
-    throw new Error("ENCRYPTION_KEY debe ser 32 bytes en base64 (openssl rand -base64 32)");
-  }
-  return key;
+/**
+ * ENCRYPTION_KEY acepta:
+ * - 32 bytes en base64 (openssl rand -base64 32), o
+ * - un texto aleatorio de 32+ caracteres (p. ej. SERVICE_PASSWORD_64 de Coolify),
+ *   del que se deriva la clave con SHA-256.
+ */
+function loadKey(rawKey: string): Buffer {
+  const decoded = Buffer.from(rawKey, "base64");
+  if (decoded.length === 32 && decoded.toString("base64") === rawKey) return decoded;
+  if (rawKey.length >= 32) return createHash("sha256").update(rawKey, "utf8").digest();
+  throw new Error(
+    "ENCRYPTION_KEY debe ser 32 bytes en base64 (openssl rand -base64 32) o un texto aleatorio de 32+ caracteres",
+  );
 }
 
 export function encryptSecret(plaintext: string, base64Key: string): string {

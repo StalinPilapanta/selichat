@@ -27,6 +27,14 @@ describe("crypto", () => {
     expect(() => encryptSecret("x", Buffer.from("corta").toString("base64"))).toThrow();
   });
 
+  it("acepta un texto largo como clave (derivada con SHA-256)", () => {
+    const passphrase = "a".repeat(20) + "Zx9QwErTyUiOpAsDfGhJkL1234567890";
+    const enc = encryptSecret("dato", passphrase);
+    expect(decryptSecret(enc, passphrase)).toBe("dato");
+    expect(() => decryptSecret(enc, key)).toThrow();
+    expect(() => encryptSecret("x", "corta")).toThrow();
+  });
+
   it("enmascara", () => {
     expect(maskSecret("sk-abcdef1234")).toBe("••••1234");
   });

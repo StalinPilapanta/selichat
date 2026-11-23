@@ -1,6 +1,8 @@
 # Despliegue en Coolify (build pack "Docker Compose").
 # Solo el servicio "web" necesita dominio público; el API queda en la red interna
 # y el navegador lo alcanza vía /api/* a través de la web.
+# Los secretos los genera Coolify (variables mágicas SERVICE_PASSWORD_*) y quedan
+# guardados en Coolify: no hace falta escribirlos a mano.
 services:
   web:
     build:
@@ -21,12 +23,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: "4000"
-      DATABASE_URL: postgres://chatea_app:${APP_DB_PASSWORD}@postgres:5432/chatea
-      MIGRATION_DATABASE_URL: postgres://chatea:${POSTGRES_PASSWORD}@postgres:5432/chatea
+      DATABASE_URL: postgres://chatea_app:${SERVICE_PASSWORD_APPDB}@postgres:5432/chatea
+      MIGRATION_DATABASE_URL: postgres://chatea:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/chatea
       REDIS_URL: redis://redis:6379
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-      WEB_URL: ${WEB_URL}
+      # ¡No cambiar después del primer despliegue! Cifra las API keys y tokens guardados.
+      ENCRYPTION_KEY: ${SERVICE_PASSWORD_64_ENCRYPTION}
+      BETTER_AUTH_SECRET: ${SERVICE_PASSWORD_64_BETTERAUTH}
+      WEB_URL: ${SERVICE_URL_WEB}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       SMTP_URL: ${SMTP_URL:-}
@@ -44,15 +47,16 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: pgvector/pgvector:pg17
+    build:
+      context: .
+      dockerfile: infra/postgres/Dockerfile
     environment:
       POSTGRES_USER: chatea
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
       POSTGRES_DB: chatea
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      APP_DB_PASSWORD: ${SERVICE_PASSWORD_APPDB}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U chatea"]
       interval: 5s
