@@ -115,6 +115,16 @@ export async function whatsappRoutes(
           !verifySignature(raw, req.headers["x-hub-signature-256"] as string | undefined, secret)
         ) {
           req.log.warn({ channelId: ch.id }, "webhook de WhatsApp con firma inválida");
+          // Visible en Integraciones → WhatsApp: casi siempre es un App Secret equivocado.
+          await withTenant(db, ch.tenantId, (tx) =>
+            tx
+              .update(channels)
+              .set({
+                status: "error",
+                lastError: `Meta envió un webhook (${new Date().toISOString()}) pero la firma no coincide: revisa que el App Secret sea el de esta app de Meta.`,
+              })
+              .where(eq(channels.id, ch.id)),
+          );
           return reply.code(401).send();
         }
         let payload: unknown;
