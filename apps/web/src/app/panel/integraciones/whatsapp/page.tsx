@@ -371,6 +371,7 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [token, setToken] = useState("");
+  const [secret, setSecret] = useState("");
 
   async function run(fn: () => Promise<unknown>, ok: string) {
     setError("");
