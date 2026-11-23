@@ -462,6 +462,31 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
         >
           Cambiar token
         </button>
+        <input
+          className="input max-w-xs font-mono"
+          type="password"
+          autoComplete="off"
+          placeholder="Nuevo App Secret (32 caracteres)"
+          aria-label="Nuevo App Secret"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value.trim())}
+        />
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={!/^[a-f0-9]{32}$/i.test(secret)}
+          onClick={() =>
+            run(async () => {
+              await api(`/api/channels/${ch.id}`, {
+                method: "PATCH",
+                body: { appSecret: secret },
+              });
+              setSecret("");
+            }, "App Secret actualizado. Envía un mensaje de prueba.")
+          }
+        >
+          Cambiar App Secret
+        </button>
         <button
           type="button"
           className="ml-auto text-sm text-red-600 hover:underline"
