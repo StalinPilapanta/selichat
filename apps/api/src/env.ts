@@ -19,7 +19,7 @@ const schema = z.object({
   WHATSAPP_GRAPH_VERSION: z
     .string()
     .regex(/^v\d+\.\d+$/)
-    .default("v23.0"),
+    .default("v27.0"),
 });
 
 export type Env = z.infer<typeof schema>;

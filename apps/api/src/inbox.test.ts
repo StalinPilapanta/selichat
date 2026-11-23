@@ -255,7 +255,7 @@ describe.skipIf(!hasDb)("WhatsApp + bandeja", () => {
     const out = res.json();
     expect(out).toMatchObject({ status: "enviado", direction: "out", author: "humano" });
     const last = meta.sent.at(-1);
-    expect(last?.url).toContain(`/v23.0/${pnid}/messages`);
+    expect(last?.url).toContain(`/v27.0/${pnid}/messages`);
     expect(last?.body).toMatchObject({
       to: "593991234567",
       type: "text",
