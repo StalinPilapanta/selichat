@@ -1,5 +1,5 @@
 "use client";
-import { formatPhone } from "@chatea/shared";
+import { CHECKOUT_FIELDS, type CheckoutField, formatPhone } from "@chatea/shared";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "@/lib/api";
@@ -130,8 +130,13 @@ export function Details({
             <span className="block text-xs text-zinc-500">
               {conv.botPaused
                 ? "La IA no responderá; atiende un humano."
-                : "La IA responderá (desde la Fase 3)."}
+                : "La IA responde a los mensajes del cliente."}
             </span>
+            {conv.botPaused && conv.handoffReason && (
+              <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
+                Motivo: {conv.handoffReason}
+              </span>
+            )}
           </span>
           <input
             type="checkbox"
@@ -139,6 +144,7 @@ export function Details({
             onChange={(e) => patch({ botPaused: !e.target.checked })}
           />
         </label>
+        <OrderData state={conv.checkoutState ?? {}} />
         <button
           type="button"
           className="btn-ghost w-full"
@@ -227,6 +233,42 @@ export function Details({
         ))}
       </section>
       {error && <p className="text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+const STAGE_LABEL: Record<string, string> = {
+  descubrimiento: "Conociendo al cliente",
+  datos: "Tomando datos",
+  confirmado: "Pedido confirmado",
+  cancelado: "Cancelado",
+};
+
+/** Datos del pedido que la IA fue registrando en la conversación. */
+function OrderData({ state }: { state: Record<string, string> }) {
+  const fields = (Object.keys(CHECKOUT_FIELDS) as CheckoutField[]).filter((k) => state[k]?.trim());
+  return (
+    <div className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <div className="flex items-center justify-between">
+        <span className="font-medium">Pedido</span>
+        <span
+          className={`text-xs ${state.etapa === "confirmado" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-500"}`}
+        >
+          {STAGE_LABEL[state.etapa ?? "descubrimiento"] ?? state.etapa}
+        </span>
+      </div>
+      {fields.length ? (
+        <dl className="mt-2 space-y-1 text-xs">
+          {fields.map((k) => (
+            <div key={k} className="flex gap-2">
+              <dt className="w-24 shrink-0 text-zinc-500">{CHECKOUT_FIELDS[k]}</dt>
+              <dd className="break-words">{state[k]}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="mt-1 text-xs text-zinc-500">La IA aún no registró datos.</p>
+      )}
     </div>
   );
 }

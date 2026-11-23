@@ -103,6 +103,12 @@ export const conversations = pgTable(
     lastMessagePreview: text("last_message_preview").notNull().default(""),
     /** Último mensaje del cliente: abre la ventana de 24 h para mensajes libres. */
     lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
+    /** Datos del pedido que va completando el agente de ventas (ver @chatea/shared/checkout). */
+    checkoutState: jsonb("checkout_state").$type<Record<string, string>>().notNull().default({}),
+    /** Cuándo se envió el embudo inicial del producto (mensaje + media + pregunta). */
+    funnelSentAt: timestamp("funnel_sent_at", { withTimezone: true }),
+    /** Por qué la IA pasó la conversación a un humano (se muestra en la bandeja). */
+    handoffReason: text("handoff_reason"),
     ...timestamps,
   },
   (t) => [
@@ -185,5 +191,36 @@ export const messageTemplates = pgTable(
   },
   (t) => [
     uniqueIndex("message_templates_channel_name_lang_uq").on(t.channelId, t.name, t.language),
+  ],
+);
+
+/** Cada ejecución del agente IA: costo (tokens), latencia, herramientas usadas y errores. */
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    agent: text("agent").notNull(),
+    model: text("model").notNull().default(""),
+    status: text("status").notNull(), // ok | error | omitido
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cachedTokens: integer("cached_tokens").notNull().default(0),
+    latencyMs: integer("latency_ms").notNull().default(0),
+    steps: integer("steps").notNull().default(0),
+    toolCalls: jsonb("tool_calls")
+      .$type<{ name: string; input: unknown }[]>()
+      .notNull()
+      .default([]),
+    reply: text("reply").notNull().default(""),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("agent_runs_conv_idx").on(t.conversationId, t.createdAt),
+    index("agent_runs_tenant_created_idx").on(t.tenantId, t.createdAt),
   ],
 );

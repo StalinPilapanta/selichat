@@ -1,6 +1,8 @@
 import { createDb } from "@chatea/db";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { runSalesAgent } from "./agent/sales-agent.js";
+import { AgentScheduler } from "./agent/scheduler.js";
 import { createModelResolver, type ModelResolver } from "./ai/models.js";
 import { createAuth } from "./auth.js";
 import type { Env } from "./env.js";
@@ -23,6 +25,8 @@ export interface AppDeps extends ImportDeps {
   /** fetch hacia la Graph API de Meta (inyectable en pruebas). */
   metaFetch?: typeof fetch;
   bus?: RealtimeBus;
+  /** Para pruebas: acceso al scheduler del agente. */
+  onScheduler?: (s: AgentScheduler) => void;
 }
 
 export async function buildApp(env: Env, deps: AppDeps = {}) {
@@ -62,7 +66,23 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     graphVersion: env.WHATSAPP_GRAPH_VERSION,
     fetchImpl: deps.metaFetch,
   };
-  await app.register(whatsappRoutes, { auth, db, bus, wa, publicBaseUrl: env.WEB_URL });
+  const resolveModel = deps.resolveModel ?? createModelResolver(db, env.ENCRYPTION_KEY);
+  const scheduler = new AgentScheduler(
+    (tenantId, conversationId) =>
+      runSalesAgent({ db, wa, bus, resolveModel, log: app.log }, tenantId, conversationId),
+    env.AGENT_DEBOUNCE_MS,
+    (e, conversationId) =>
+      app.log.error({ err: e, conversationId }, "error en el turno del agente"),
+  );
+  deps.onScheduler?.(scheduler);
+  await app.register(whatsappRoutes, {
+    auth,
+    db,
+    bus,
+    wa,
+    publicBaseUrl: env.WEB_URL,
+    onInbound: (t, c) => scheduler.schedule(t, c),
+  });
   await app.register(inboxRoutes, { auth, db, bus, wa, uploadDir: env.UPLOAD_DIR });
   await app.register(uploadRoutes, {
     auth,
@@ -73,10 +93,11 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
   await app.register(aiRoutes, {
     auth,
     db,
-    resolveModel: deps.resolveModel ?? createModelResolver(db, env.ENCRYPTION_KEY),
+    resolveModel,
   });
 
   app.addHook("onClose", async () => {
+    scheduler.stop();
     await client.end();
   });
   return app;

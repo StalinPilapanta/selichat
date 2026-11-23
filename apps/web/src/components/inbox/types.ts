@@ -11,6 +11,10 @@ export type ConversationRow = {
   productId: string | null;
   channelId: string;
   windowOpen: boolean;
+  /** Datos del pedido que registró el agente IA. */
+  checkoutState: Record<string, string>;
+  /** Motivo por el que la IA pasó la conversación a un humano. */
+  handoffReason: string | null;
   contact: {
     id: string;
     phone: string;

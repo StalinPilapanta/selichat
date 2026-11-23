@@ -27,4 +27,5 @@ export const TENANT_TABLES = [
   "messages",
   "conversation_notes",
   "message_templates",
+  "agent_runs",
 ] as const;

@@ -45,7 +45,15 @@ const templateBody = z.object({
 
 export async function whatsappRoutes(
   app: FastifyInstance,
-  opts: { auth: Auth; db: Database; bus: RealtimeBus; wa: WaConfig; publicBaseUrl: string },
+  opts: {
+    auth: Auth;
+    db: Database;
+    bus: RealtimeBus;
+    wa: WaConfig;
+    publicBaseUrl: string;
+    /** Agenda el turno del agente IA cuando escribe el cliente. */
+    onInbound?: (tenantId: string, conversationId: string) => void;
+  },
 ) {
   const { auth, db, bus, wa } = opts;
   const anyMember = requireTenant(auth, db);
@@ -136,7 +144,10 @@ export async function whatsappRoutes(
         const events = await withTenant(db, ch.tenantId, (tx) =>
           ingestWebhook(tx, ch, parseWebhook(payload)),
         );
-        for (const e of events) bus.publish(ch.tenantId, e);
+        for (const e of events) {
+          bus.publish(ch.tenantId, e);
+          if (e.type === "message") opts.onInbound?.(ch.tenantId, e.conversationId);
+        }
         return reply.code(200).send({ ok: true });
       },
     );

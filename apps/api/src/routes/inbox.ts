@@ -91,6 +91,8 @@ export async function inboxRoutes(
     lastInboundAt: conversations.lastInboundAt,
     productId: conversations.productId,
     channelId: conversations.channelId,
+    checkoutState: conversations.checkoutState,
+    handoffReason: conversations.handoffReason,
     contact: {
       id: contacts.id,
       phone: contacts.phone,
@@ -240,7 +242,8 @@ export async function inboxRoutes(
       const row = await withTenant(db, req.ctx.tenantId, async (tx) => {
         const [c] = await tx
           .update(conversations)
-          .set(body.data)
+          // Reanudar la IA borra el motivo del paso a humano.
+          .set(body.data.botPaused === false ? { ...body.data, handoffReason: null } : body.data)
           .where(eq(conversations.id, req.params.id))
           .returning();
         if (c && body.data.botPaused !== undefined)
@@ -310,6 +313,8 @@ export async function inboxRoutes(
             .update(conversations)
             .set({
               assignedUserId: sql`coalesce(${conversations.assignedUserId}, ${req.ctx.userId})`,
+              // Un humano tomó la conversación: la IA deja de responder hasta que se reanude.
+              botPaused: true,
             })
             .where(eq(conversations.id, c.id));
         return { status: 201 as const, body: msg };
