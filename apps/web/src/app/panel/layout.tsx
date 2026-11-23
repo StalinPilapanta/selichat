@@ -80,7 +80,9 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
           >
             {orgs.map((o) => (
               <option key={o.id} value={o.id}>
-                {o.name}
+                {orgs.filter((x) => x.name === o.name).length > 1
+                  ? `${o.name} (${o.slug})`
+                  : o.name}
               </option>
             ))}
           </select>

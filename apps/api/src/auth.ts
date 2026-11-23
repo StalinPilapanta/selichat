@@ -2,6 +2,7 @@ import { type Database, schema, withTenant } from "@chatea/db";
 import { ac, roles } from "@chatea/shared/access";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError } from "better-auth/api";
 import { magicLink, organization } from "better-auth/plugins";
 import type { Env } from "./env.js";
 import type { Mailer } from "./mailer.js";
@@ -64,6 +65,18 @@ export function createAuth(deps: { env: Env; db: Database; mail: Mailer }) {
                 .insert(schema.auditLog)
                 .values({ actorUserId: user.id, action: "tenant.created", target: org.id });
             });
+          },
+          // No se puede borrar una tienda con WhatsApp conectado: evita borrar la equivocada.
+          beforeDeleteOrganization: async ({ organization: org }) => {
+            const chans = await withTenant(db, org.id, (tx) =>
+              tx.select({ id: schema.channels.id }).from(schema.channels).limit(1),
+            );
+            if (chans.length > 0) {
+              throw new APIError("BAD_REQUEST", {
+                message:
+                  "Esta tienda tiene un número de WhatsApp conectado. Desconéctalo antes de eliminarla.",
+              });
+            }
           },
         },
       }),

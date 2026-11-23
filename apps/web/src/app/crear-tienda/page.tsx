@@ -1,6 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthShell, ErrorText } from "@/components/ui";
 import { authClient, useSession } from "@/lib/auth-client";
 
@@ -20,6 +20,8 @@ export default function Page() {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Evita crear la tienda dos veces por doble clic / Enter antes de que se re-renderice.
+  const busy = useRef(false);
 
   useEffect(() => {
     if (!isPending && !session) router.replace("/entrar?next=/crear-tienda");
@@ -27,12 +29,15 @@ export default function Page() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy.current) return;
+    busy.current = true;
     setError("");
     setLoading(true);
     const suffix = Math.random().toString(36).slice(2, 6);
     const res = await authClient.organization.create({ name, slug: `${slugify(name)}-${suffix}` });
     if (res.error) {
       setLoading(false);
+      busy.current = false;
       return setError(res.error.message ?? "No se pudo crear la tienda");
     }
     await authClient.organization.setActive({ organizationId: res.data.id });

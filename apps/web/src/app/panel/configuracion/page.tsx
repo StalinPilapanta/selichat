@@ -3,6 +3,7 @@ import { CURRENCIES } from "@chatea/shared";
 import { useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
+import { authClient, useActiveOrganization } from "@/lib/auth-client";
 
 type Settings = {
   country: string;
@@ -146,6 +147,58 @@ export default function Page() {
           <ErrorText>{error}</ErrorText>
         </div>
       </form>
+      <DeleteStore />
     </>
+  );
+}
+
+/** Zona de peligro: borra la tienda activa (el servidor rechaza si tiene WhatsApp conectado). */
+function DeleteStore() {
+  const { data: active } = useActiveOrganization();
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!active) return null;
+
+  async function remove() {
+    if (!active) return;
+    setBusy(true);
+    setError("");
+    const res = await authClient.organization.delete({ organizationId: active.id });
+    if (res.error) {
+      setBusy(false);
+      return setError(res.error.message ?? "No se pudo eliminar la tienda");
+    }
+    window.location.href = "/panel";
+  }
+
+  return (
+    <section className="mt-10 max-w-2xl rounded-lg border border-red-300 p-4 dark:border-red-900">
+      <h2 className="font-semibold text-red-700 dark:text-red-400">Eliminar tienda</h2>
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        Borra <strong>{active.name}</strong> ({active.slug}) con todos sus productos, prompts y
+        conversaciones. No se puede deshacer. Escribe el nombre de la tienda para confirmar.
+      </p>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <input
+          className="input"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder={active.name}
+          aria-label="Nombre de la tienda para confirmar"
+        />
+        <button
+          type="button"
+          className="btn bg-red-600 hover:bg-red-700"
+          disabled={busy || confirm.trim() !== active.name}
+          onClick={remove}
+        >
+          Eliminar
+        </button>
+      </div>
+      <div className="mt-2">
+        <ErrorText>{error}</ErrorText>
+      </div>
+    </section>
   );
 }
