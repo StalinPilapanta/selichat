@@ -31,7 +31,12 @@ import {
 } from "../orders/service.js";
 import type { RealtimeBus } from "../realtime.js";
 import { loadProduct } from "../services/catalog.js";
-import { type SendInput, sendToConversation, type WaConfig } from "../whatsapp/service.js";
+import {
+  type SendInput,
+  sendToConversation,
+  showTyping,
+  type WaConfig,
+} from "../whatsapp/service.js";
 import { CONFIRMED_LABEL, loadAgentPrompt, runAgentTurn, tenantInfo } from "./engine.js";
 import { sameReply, splitReply, toModelMessages, withImages } from "./format.js";
 import { prepareTurnMedia } from "./media.js";
@@ -59,7 +64,12 @@ export interface AgentDeps {
   /** Buscador de agencias Servientrega (URL de la plataforma). */
   agencies?: AgencyDeps;
   log?: { warn: (o: object, m: string) => void; error: (o: object, m: string) => void };
+  /** Pausa con «escribiendo…» entre burbujas (ms por carácter, con tope); 0 en pruebas. */
+  typingPaceMs?: number;
 }
+
+/** Meta muestra «escribiendo…» hasta 25 s: se renueva mientras la IA piensa. */
+const TYPING_REFRESH_MS = 20_000;
 
 const historyQuery = (tx: Tx, conversationId: string) =>
   tx
@@ -152,6 +162,7 @@ async function salesTurn(
   });
   if (!ctx) return { status: "omitido", reason: "no_existe" };
   const { conv, contact, settings } = ctx;
+  const turnHistory = ctx.history;
 
   // ---------- Guardas ----------
   if (conv.botPaused) return { status: "omitido", reason: "bot_pausado" };
@@ -180,133 +191,159 @@ async function salesTurn(
     throw e;
   }
 
-  // ---------- Audios e imágenes del cliente ----------
-  const media = await prepareTurnMedia(deps, tenantId, conversationId, {
-    vision: resolved.kind ? VISION_KINDS.includes(resolved.kind) : false,
-  });
-  let history = ctx.history;
-  if (media.transcribed > 0)
-    history = (await withTenant(db, tenantId, (tx) => historyQuery(tx, conversationId))).reverse();
-
-  // ---------- Prompt + modelo con herramientas (motor compartido con el simulador) ----------
-  const tenant = await tenantInfo(db, tenantId);
-  const prompt = await withTenant(db, tenantId, (tx) =>
-    loadAgentPrompt(tx, {
-      productId: conv.productId,
-      tenantName: tenant.name,
-      country: settings?.country ?? tenant.country,
-    }),
-  );
-  if (!prompt) return { status: "omitido", reason: "producto_no_existe" };
-
-  const dropi = deps.dropi ? await loadDropi({ db, ...deps.dropi }, tenantId) : null;
-  const mode = deps.agencies?.url
-    ? await agencyMode(db, tenantId, deps.agencies.encryptionKey)
-    : "off";
-  const agencies = mode !== "off" ? deps.agencies : null;
-
-  const started = Date.now();
-  let turn: Awaited<ReturnType<typeof runAgentTurn>>;
-  const calls: { name: string; input: unknown }[] = [];
+  // ---------- «Escribiendo…» mientras la IA piensa ----------
+  const typing = () =>
+    withTenant(db, tenantId, (tx) => showTyping(tx, deps.wa, conversationId)).catch(() => false);
+  void typing();
+  const typingTimer = setInterval(() => void typing(), TYPING_REFRESH_MS);
+  typingTimer.unref?.();
   try {
-    turn = await runAgentTurn({
-      resolved,
-      prompt,
-      agencyOnly: mode === "solo",
-      hasProduct: Boolean(conv.productId),
-      checkout: (conv.checkoutState ?? {}) as CheckoutState,
-      context: {
-        now: new Date(),
-        timezone: settings?.timezone ?? tenant.timezone,
-        customerName: contact.name ?? contact.profileName ?? "desconocido",
-        phone: contact.phone,
-      },
-      messages: withImages(toModelMessages(history), media.images),
-      io: {
-        saveCheckout: async (state, label) => {
-          await saveCheckout(db, tenantId, conversationId, state, label);
-          if (label === CONFIRMED_LABEL) await onConfirmed(deps, tenantId, conversationId);
-        },
-        handoff: (reason) => handoff(deps, tenantId, conversationId, reason),
-        ...(dropi
-          ? {
-              checkCity: (ciudad: string, provincia?: string) =>
-                resolvePlace(dropi.client, dropi.config.options.rateType, ciudad, provincia),
-            }
-          : {}),
-        ...(agencies
-          ? {
-              findAgencies: (texto: string, hint?: { ciudad?: string }) =>
-                findAgencies(agencies.url, texto, agencies.fetchImpl, {
-                  ciudad: hint?.ciudad,
-                  geocoder: agencies.geocoder,
-                  nombreCliente: [contact.name, contact.profileName].filter(Boolean).join(" "),
-                }),
-              chooseAgency: (value: string) =>
-                resolveAgency(agencies.url, value, agencies.fetchImpl),
-            }
-          : {}),
-        selectProduct: (productId) =>
-          withTenant(db, tenantId, async (tx) => {
-            const [p] = await tx
-              .select({ id: products.id })
-              .from(products)
-              .where(and(eq(products.id, productId), eq(products.status, "activo")));
-            if (!p) return false;
-            await tx
-              .update(conversations)
-              .set({ productId })
-              .where(eq(conversations.id, conversationId));
-            return true;
-          }),
-      },
+    return await think();
+  } finally {
+    clearInterval(typingTimer);
+  }
+
+  async function think(): Promise<Outcome> {
+    // ---------- Audios e imágenes del cliente ----------
+    const media = await prepareTurnMedia(deps, tenantId, conversationId, {
+      vision: resolved.kind ? VISION_KINDS.includes(resolved.kind) : false,
     });
-  } catch (e) {
-    const error = (e as Error).message.slice(0, 500);
+    let history = turnHistory;
+    if (media.transcribed > 0)
+      history = (
+        await withTenant(db, tenantId, (tx) => historyQuery(tx, conversationId))
+      ).reverse();
+
+    // ---------- Prompt + modelo con herramientas (motor compartido con el simulador) ----------
+    const tenant = await tenantInfo(db, tenantId);
+    const prompt = await withTenant(db, tenantId, (tx) =>
+      loadAgentPrompt(tx, {
+        productId: conv.productId,
+        tenantName: tenant.name,
+        country: settings?.country ?? tenant.country,
+      }),
+    );
+    if (!prompt) return { status: "omitido", reason: "producto_no_existe" };
+
+    const dropi = deps.dropi ? await loadDropi({ db, ...deps.dropi }, tenantId) : null;
+    const mode = deps.agencies?.url
+      ? await agencyMode(db, tenantId, deps.agencies.encryptionKey)
+      : "off";
+    const agencies = mode !== "off" ? deps.agencies : null;
+
+    const started = Date.now();
+    let turn: Awaited<ReturnType<typeof runAgentTurn>>;
+    const calls: { name: string; input: unknown }[] = [];
+    try {
+      turn = await runAgentTurn({
+        resolved,
+        prompt,
+        agencyOnly: mode === "solo",
+        hasProduct: Boolean(conv.productId),
+        checkout: (conv.checkoutState ?? {}) as CheckoutState,
+        context: {
+          now: new Date(),
+          timezone: settings?.timezone ?? tenant.timezone,
+          customerName: contact.name ?? contact.profileName ?? "desconocido",
+          phone: contact.phone,
+        },
+        messages: withImages(toModelMessages(history), media.images),
+        io: {
+          saveCheckout: async (state, label) => {
+            await saveCheckout(db, tenantId, conversationId, state, label);
+            if (label === CONFIRMED_LABEL) await onConfirmed(deps, tenantId, conversationId);
+          },
+          handoff: (reason) => handoff(deps, tenantId, conversationId, reason),
+          ...(dropi
+            ? {
+                checkCity: (ciudad: string, provincia?: string) =>
+                  resolvePlace(dropi.client, dropi.config.options.rateType, ciudad, provincia, db),
+              }
+            : {}),
+          ...(agencies
+            ? {
+                findAgencies: (texto: string, hint?: { ciudad?: string }) =>
+                  findAgencies(agencies.url, texto, agencies.fetchImpl, {
+                    ciudad: hint?.ciudad,
+                    geocoder: agencies.geocoder,
+                    nombreCliente: [contact.name, contact.profileName].filter(Boolean).join(" "),
+                  }),
+                chooseAgency: (value: string) =>
+                  resolveAgency(agencies.url, value, agencies.fetchImpl),
+              }
+            : {}),
+          selectProduct: (productId) =>
+            withTenant(db, tenantId, async (tx) => {
+              const [p] = await tx
+                .select({ id: products.id })
+                .from(products)
+                .where(and(eq(products.id, productId), eq(products.status, "activo")));
+              if (!p) return false;
+              await tx
+                .update(conversations)
+                .set({ productId })
+                .where(eq(conversations.id, conversationId));
+              return true;
+            }),
+        },
+      });
+    } catch (e) {
+      const error = (e as Error).message.slice(0, 500);
+      await recordRun(db, tenantId, conversationId, {
+        model: resolved.label,
+        status: "error",
+        latencyMs: Date.now() - started,
+        toolCalls: calls,
+        error,
+      });
+      deps.log?.error({ conversationId, err: error }, "falló el agente de ventas");
+      return { status: "error", error };
+    }
+    let { reply, handedOff } = turn;
+    const { outbox, usage } = turn;
+    calls.push(...turn.calls);
+
+    // ---------- Anti-bucle ----------
+    const lastAi = [...history].reverse().find((m) => m.direction === "out" && m.author === "ia");
+    if (reply && lastAi && sameReply(reply, lastAi.body) && !handedOff) {
+      handedOff = true;
+      await handoff(deps, tenantId, conversationId, "La IA iba a repetir la misma respuesta.");
+      reply = "";
+    }
+
+    // ---------- Envío ----------
+    const parts = splitReply(reply, 3);
+    const queue: SendInput[] = [
+      ...parts.map((body) => ({ kind: "text" as const, body })),
+      ...outbox,
+    ];
+    const pace = deps.typingPaceMs ?? 0;
+    for (const [i, input] of queue.entries()) {
+      // Entre burbujas: «escribiendo…» y una pausa según el largo, como una persona.
+      if (i > 0 && pace > 0) {
+        await typing();
+        const len = input.kind === "text" ? input.body.length : 40;
+        await new Promise((r) => setTimeout(r, Math.min(3500, 600 + len * pace)));
+      }
+      const msg = await withTenant(db, tenantId, (tx) =>
+        sendToConversation(tx, deps.wa, conversationId, input, { kind: "ia" }),
+      );
+      if (msg) deps.bus.publish(tenantId, { type: "message", conversationId, messageId: msg.id });
+    }
+
     await recordRun(db, tenantId, conversationId, {
       model: resolved.label,
-      status: "error",
+      status: "ok",
+      inputTokens: usage.input,
+      outputTokens: usage.output,
+      cachedTokens: usage.cached,
+      steps: usage.steps,
       latencyMs: Date.now() - started,
       toolCalls: calls,
-      error,
+      reply,
     });
-    deps.log?.error({ conversationId, err: error }, "falló el agente de ventas");
-    return { status: "error", error };
+    return { status: "ok", parts: queue.length };
   }
-  let { reply, handedOff } = turn;
-  const { outbox, usage } = turn;
-  calls.push(...turn.calls);
-
-  // ---------- Anti-bucle ----------
-  const lastAi = [...history].reverse().find((m) => m.direction === "out" && m.author === "ia");
-  if (reply && lastAi && sameReply(reply, lastAi.body) && !handedOff) {
-    handedOff = true;
-    await handoff(deps, tenantId, conversationId, "La IA iba a repetir la misma respuesta.");
-    reply = "";
-  }
-
-  // ---------- Envío ----------
-  const parts = splitReply(reply, 3);
-  const queue: SendInput[] = [...parts.map((body) => ({ kind: "text" as const, body })), ...outbox];
-  for (const input of queue) {
-    const msg = await withTenant(db, tenantId, (tx) =>
-      sendToConversation(tx, deps.wa, conversationId, input, { kind: "ia" }),
-    );
-    if (msg) deps.bus.publish(tenantId, { type: "message", conversationId, messageId: msg.id });
-  }
-
-  await recordRun(db, tenantId, conversationId, {
-    model: resolved.label,
-    status: "ok",
-    inputTokens: usage.input,
-    outputTokens: usage.output,
-    cachedTokens: usage.cached,
-    steps: usage.steps,
-    latencyMs: Date.now() - started,
-    toolCalls: calls,
-    reply,
-  });
-  return { status: "ok", parts: queue.length };
 }
 
 /** Mensaje inicial + media "inicial" + pregunta de entrada del producto. */

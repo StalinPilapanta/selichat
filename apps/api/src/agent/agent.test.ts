@@ -116,6 +116,7 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
   const sent: Record<string, unknown>[] = [];
   let llmCalls = 0;
   let failNext = false;
+  const typings: Record<string, unknown>[] = [];
   let pnid = "";
   let channelId = "";
 
@@ -131,7 +132,10 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     if (url.startsWith("https://lookaside.test/"))
       return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
     if (url.endsWith("/messages")) {
-      if (body.status === "read") return Response.json({ success: true });
+      if (body.status === "read") {
+        if (body.typing_indicator) typings.push(body);
+        return Response.json({ success: true });
+      }
       sent.push(body);
       return Response.json({ messages: [{ id: `wamid.AI${sent.length}` }] });
     }
@@ -285,7 +289,14 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     ]);
 
     // 2) Da sus datos → la IA los registra y contesta en 2 burbujas.
+    expect(typings).toHaveLength(0); // el embudo fijo no «escribe»
     await webhook("wamid.AGIN2", "Para mí, soy Ana Pérez de Quito");
+    // Mientras la IA piensa, el cliente ve «escribiendo…» sobre su último mensaje.
+    expect(typings[0]).toMatchObject({
+      status: "read",
+      message_id: "wamid.AGIN2",
+      typing_indicator: { type: "text" },
+    });
     expect(llmCalls).toBe(2);
     expect(texts(2)).toEqual(["¡Gracias Ana! 😊", "¿Me confirmas tu dirección en Quito?"]);
     const [conv] = (await h.call(o.cookie, "GET", "/api/conversations")).json();

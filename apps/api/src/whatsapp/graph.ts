@@ -113,6 +113,19 @@ export class Graph {
     });
   }
 
+  /**
+   * Marca leído y muestra «escribiendo…» al cliente (dura hasta 25 s o hasta la respuesta).
+   * https://developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators
+   */
+  typing(phoneNumberId: string, waMessageId: string) {
+    return this.call("POST", `${phoneNumberId}/messages`, {
+      messaging_product: "whatsapp",
+      status: "read",
+      message_id: waMessageId,
+      typing_indicator: { type: "text" },
+    });
+  }
+
   /** Descarga en 2 pasos: id → URL temporal → bytes (con el mismo token). */
   async downloadMedia(mediaId: string): Promise<{ bytes: Buffer; mimeType: string }> {
     const meta = await this.call<{ url: string; mime_type: string }>("GET", mediaId);

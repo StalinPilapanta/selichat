@@ -31,8 +31,16 @@ import {
 import { DropiMcpClient, type McpTokens } from "../dropi/mcp.js";
 import { loadProduct } from "../services/catalog.js";
 
-const { orders, orderEvents, integrations, conversations, contacts, tenantSettings, dropiRoutes } =
-  schema;
+const {
+  orders,
+  orderEvents,
+  integrations,
+  conversations,
+  contacts,
+  tenantSettings,
+  dropiRoutes,
+  dropiPlaces,
+} = schema;
 type OrderCustomer = schema.OrderCustomer;
 type OrderItem = schema.OrderItem;
 type OrderRisk = schema.OrderRisk;
@@ -71,20 +79,41 @@ export function writeDropiConfig(cfg: DropiConfig, key: string) {
 }
 
 /** Cliente según el modo; en MCP los tokens renovados se guardan cifrados en la integración. */
+/**
+ * Clientes MCP vivos por tienda y autorización: reutilizan la sesión con Dropi entre turnos
+ * (abrir sesión en cada respuesta sumaba segundos). Al renovarse los tokens cambia la clave.
+ */
+const mcpClients = new Map<string, { at: number; client: DropiApi }>();
+const MCP_CLIENT_TTL = 15 * 60_000;
+
 export function dropiClient(deps: DropiDeps, tenantId: string, config: DropiConfig): DropiApi {
-  if (config.mode === "mcp" && config.mcp)
-    return new DropiMcpClient(
-      config.mcp,
-      config.country,
-      async (mcp) => {
-        const configEnc = writeDropiConfig({ ...config, mcp }, deps.encryptionKey);
-        await withTenant(deps.db, tenantId, (tx) =>
-          tx.update(integrations).set({ configEnc }).where(eq(integrations.kind, "dropi")),
-        );
-      },
-      deps.fetchImpl,
-    );
+  if (config.mode === "mcp" && config.mcp) {
+    const key = `${tenantId}|${config.mcp.refreshToken || config.mcp.accessToken}`;
+    const hit = mcpClients.get(key);
+    // En pruebas (fetch inyectado) no se reutiliza, para que cada caso sea independiente.
+    if (hit && !deps.fetchImpl && Date.now() - hit.at < MCP_CLIENT_TTL) return hit.client;
+    for (const [k, v] of mcpClients)
+      if (k.startsWith(`${tenantId}|`) || Date.now() - v.at > MCP_CLIENT_TTL) mcpClients.delete(k);
+    const client = newMcpClient(deps, tenantId, config);
+    if (!deps.fetchImpl) mcpClients.set(key, { at: Date.now(), client });
+    return client;
+  }
   return new DropiClient(config.token, config.country, deps.fetchImpl);
+}
+
+function newMcpClient(deps: DropiDeps, tenantId: string, config: DropiConfig): DropiApi {
+  const mcp = config.mcp as McpTokens;
+  return new DropiMcpClient(
+    mcp,
+    config.country,
+    async (fresh) => {
+      const configEnc = writeDropiConfig({ ...config, mcp: fresh }, deps.encryptionKey);
+      await withTenant(deps.db, tenantId, (tx) =>
+        tx.update(integrations).set({ configEnc }).where(eq(integrations.kind, "dropi")),
+      );
+    },
+    deps.fetchImpl,
+  );
 }
 
 export async function loadDropi(deps: DropiDeps, tenantId: string) {
@@ -96,18 +125,117 @@ export async function loadDropi(deps: DropiDeps, tenantId: string) {
   return { config, client: dropiClient(deps, tenantId, config) };
 }
 
-// ---------- Ciudades (cobertura de Dropi) ----------
+// ---------- Provincias y ciudades: catálogo local (no se consulta Dropi en cada mensaje) ----------
 
-const deptCache = new Map<string, { at: number; list: DropiDepartment[] }>();
-const DEPT_TTL = 12 * 3600_000;
-
-async function departmentsOf(client: DropiApi) {
-  const c = deptCache.get(client.key);
-  if (c && Date.now() - c.at < DEPT_TTL) return c.list;
-  const list = await client.departments();
-  deptCache.set(client.key, { at: Date.now(), list });
-  return list;
+interface PlaceSet {
+  at: number;
+  departments: DropiDepartment[];
+  cities: DropiCity[];
 }
+/** En memoria por país; respaldo en la tabla dropi_places (compartida por las tiendas). */
+const placeSets = new Map<string, PlaceSet>();
+const loadingPlaces = new Map<string, Promise<PlaceSet>>();
+const PLACES_MEMORY_TTL = 12 * 3600_000;
+/** El catálogo guardado se vuelve a cargar de Dropi una vez al mes. */
+const PLACES_REFRESH_MS = 30 * 86400_000;
+
+async function savePlaces(db: Database, country: string, p: Omit<PlaceSet, "at">) {
+  const rows = [
+    ...p.departments.map((d) => ({
+      country,
+      kind: "department",
+      id: d.id,
+      name: d.name,
+      departmentId: null,
+      code: d.code,
+      zipCode: "",
+    })),
+    ...p.cities.map((c) => ({
+      country,
+      kind: "city",
+      id: c.id,
+      name: c.name,
+      departmentId: c.departmentId,
+      code: c.codDane,
+      zipCode: c.zipCode ?? "",
+    })),
+  ];
+  for (let k = 0; k < rows.length; k += 500)
+    await db
+      .insert(dropiPlaces)
+      .values(rows.slice(k, k + 500))
+      .onConflictDoUpdate({
+        target: [dropiPlaces.country, dropiPlaces.kind, dropiPlaces.id],
+        set: {
+          name: sql`excluded.name`,
+          departmentId: sql`excluded.department_id`,
+          code: sql`excluded.code`,
+          zipCode: sql`excluded.zip_code`,
+          updatedAt: new Date(),
+        },
+      });
+}
+
+async function fetchPlaces(client: DropiApi, rateType: string) {
+  const [departments, cities] = await Promise.all([
+    client.departments(),
+    client.allCities(rateType),
+  ]);
+  return { departments, cities };
+}
+
+/** Provincias y ciudades del país: memoria → base de datos → Dropi (una sola vez). */
+async function placesOf(client: DropiApi, rateType: string, db?: Database): Promise<PlaceSet> {
+  const key = client.placesKey;
+  const mem = placeSets.get(key);
+  if (mem && Date.now() - mem.at < PLACES_MEMORY_TTL) return mem;
+  const pending = loadingPlaces.get(key);
+  if (pending) return pending;
+  const load = (async () => {
+    if (db) {
+      const rows = await db.select().from(dropiPlaces).where(eq(dropiPlaces.country, key));
+      const cities = rows.filter((r) => r.kind === "city");
+      if (cities.length) {
+        const set: PlaceSet = {
+          at: Date.now(),
+          departments: rows
+            .filter((r) => r.kind === "department")
+            .map((r) => ({ id: r.id, name: r.name, code: r.code })),
+          cities: cities.map((r) => ({
+            id: r.id,
+            name: r.name,
+            departmentId: r.departmentId,
+            codDane: r.code,
+            zipCode: r.zipCode,
+          })),
+        };
+        // Viejo: se renueva en segundo plano, sin hacer esperar al cliente.
+        const oldest = Math.min(...rows.map((r) => r.updatedAt.getTime()));
+        if (Date.now() - oldest > PLACES_REFRESH_MS)
+          void fetchPlaces(client, rateType)
+            .then((fresh) => savePlaces(db, key, fresh))
+            .catch(() => null);
+        return set;
+      }
+    }
+    const fresh = await fetchPlaces(client, rateType);
+    if (db && fresh.cities.length) await savePlaces(db, key, fresh).catch(() => null);
+    return { at: Date.now(), ...fresh };
+  })();
+  loadingPlaces.set(key, load);
+  try {
+    const set = await load;
+    placeSets.set(key, set);
+    return set;
+  } finally {
+    loadingPlaces.delete(key);
+  }
+}
+
+const matchCity = (q: string) => (c: DropiCity) => {
+  const n = normPlace(c.name);
+  return n.includes(q) || q.startsWith(`${n} `);
+};
 
 export type PlaceResult =
   | {
@@ -126,17 +254,33 @@ export async function resolvePlace(
   rateType: string,
   ciudad: string,
   provincia?: string,
+  db?: Database,
 ): Promise<PlaceResult> {
   const c = normPlace(ciudad);
   if (!c) return { ok: false, reason: "Falta la ciudad." };
-  const departments = await departmentsOf(client);
+  const places = await placesOf(client, rateType, db);
+  const departments = places.departments;
   const pv = provincia ? normPlace(provincia) : "";
   const dept = pv
     ? (departments.find((d) => normPlace(d.name) === pv) ??
       departments.find((d) => normPlace(d.name).startsWith(pv) || pv.startsWith(normPlace(d.name))))
     : undefined;
   const depName = (id: number | null) => departments.find((d) => d.id === id)?.name ?? "";
-  const all = await client.searchCities(ciudad, rateType, dept?.id);
+  const inDept = (x: DropiCity) => !dept || x.departmentId === dept.id;
+  let all = places.cities.filter((x) => inDept(x) && matchCity(c)(x));
+  if (!all.length) {
+    // Ciudad que el catálogo no tiene: se pregunta a Dropi y se aprende para la próxima.
+    all = await client.searchCities(ciudad, rateType, dept?.id);
+    const known = new Set(places.cities.map((x) => x.id));
+    const nuevas = all.filter((x) => !known.has(x.id));
+    if (nuevas.length) {
+      places.cities.push(...nuevas);
+      if (db)
+        await savePlaces(db, client.placesKey, { departments: [], cities: nuevas }).catch(
+          () => null,
+        );
+    }
+  }
   let hits = all.filter((x) => normPlace(x.name) === c);
   if (!hits.length)
     hits = all.filter(
@@ -470,7 +614,7 @@ async function doUpload(
 
   try {
     const rateType = order.rateType || config.options.rateType;
-    const place = await resolvePlace(client, rateType, c.ciudad, c.provincia);
+    const place = await resolvePlace(client, rateType, c.ciudad, c.provincia, db);
     if (!place.ok)
       return fail(
         place.options?.length

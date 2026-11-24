@@ -70,7 +70,11 @@ export interface DropiApi {
   /** Identifica la cuenta para cachés en memoria sin guardar el token. */
   readonly key: string;
   readonly country: DropiCountry;
+  /** Dónde se guardan provincias/ciudades: el país (o aparte en pruebas con fetch inyectado). */
+  readonly placesKey: string;
   departments(): Promise<DropiDepartment[]>;
+  /** Todas las ciudades del país (carga única para el catálogo local de lugares). */
+  allCities(rateType: string): Promise<DropiCity[]>;
   /** Ciudades con ese nombre (exacto o parcial), opcionalmente dentro de una provincia. */
   searchCities(name: string, rateType: string, departmentId?: number): Promise<DropiCity[]>;
   createOrder(payload: DropiOrderPayload): Promise<{ id: string; status: string }>;
@@ -151,6 +155,7 @@ export class DropiClient implements DropiApi {
   readonly mode = "token" as const;
   readonly base: string;
   readonly key: string;
+  readonly placesKey: string;
 
   constructor(
     private readonly token: string,
@@ -160,6 +165,7 @@ export class DropiClient implements DropiApi {
   ) {
     this.base = (base ?? DROPI_COUNTRIES[country].base).replace(/\/?$/, "/");
     this.key = createHash("sha256").update(`${this.base}|${token}`).digest("hex").slice(0, 24);
+    this.placesKey = fetchImpl === fetch ? country : `${country}~${this.key}`;
   }
 
   private async call<T = Json>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
@@ -228,18 +234,34 @@ export class DropiClient implements DropiApi {
         .trim();
     const q = norm(name);
     const out: DropiCity[] = [];
+    // Provincias aún sin cargar: de 6 en 6 en paralelo (24 en serie tardaban demasiado).
+    const places = p;
+    const missing = ids.filter((id) => !places.cities.has(id));
+    for (let k = 0; k < missing.length; k += 6)
+      await Promise.all(
+        missing.slice(k, k + 6).map(async (id) => {
+          places.cities.set(id, await this.cities(id, rateType));
+        }),
+      );
     for (const id of ids) {
-      let list = p.cities.get(id);
-      if (!list) {
-        list = await this.cities(id, rateType);
-        p.cities.set(id, list);
-      }
+      const list = places.cities.get(id) ?? [];
       for (const c of list) {
         const n = norm(c.name);
         if (q && (n.includes(q) || q.startsWith(`${n} `)))
           out.push({ ...c, departmentId: c.departmentId ?? id });
       }
     }
+    return out;
+  }
+
+  async allCities(rateType: string): Promise<DropiCity[]> {
+    const deps = await this.departments();
+    const out: DropiCity[] = [];
+    for (let k = 0; k < deps.length; k += 6)
+      for (const list of await Promise.all(
+        deps.slice(k, k + 6).map((d) => this.cities(d.id, rateType)),
+      ))
+        out.push(...list);
     return out;
   }
 

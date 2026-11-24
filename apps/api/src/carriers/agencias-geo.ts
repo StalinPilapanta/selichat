@@ -369,7 +369,7 @@ export class Geocoder {
       try {
         const res = await this.fetchImpl(url, {
           headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-          signal: AbortSignal.timeout(10_000),
+          signal: AbortSignal.timeout(4_000),
         });
         return res.ok ? await res.json() : null;
       } catch {

@@ -16,7 +16,7 @@ const schema = z.object({
   /** Carpeta donde se guardan los archivos subidos (volumen persistente en producción). */
   UPLOAD_DIR: z.string().default("./data/uploads"),
   /** Espera tras el último mensaje del cliente antes de que responda la IA (agrupa ráfagas). */
-  AGENT_DEBOUNCE_MS: z.coerce.number().int().min(0).default(6000),
+  AGENT_DEBOUNCE_MS: z.coerce.number().int().min(0).default(2500),
   /** Cada cuánto se revisan los recordatorios automáticos; 0 = desactivado. */
   FOLLOWUPS_INTERVAL_MS: z.coerce.number().int().min(0).default(60_000),
   /** Consulta de estados en Dropi para tiendas conectadas por cuenta (MCP); 0 = apagado. */

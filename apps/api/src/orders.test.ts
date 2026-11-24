@@ -593,6 +593,7 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     listArgs: [] as Record<string, unknown>[],
     productSearches: [] as string[],
     quotes: [] as Record<string, unknown>[],
+    citySearches: [] as string[],
   };
   const toon = (text: string) => ({ content: [{ type: "text", text }] });
   const mcpFetch = async (url: string, init?: RequestInit) => {
@@ -646,6 +647,7 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
           ),
         );
       case "search_cities": {
+        mcp.citySearches.push(String(a.name));
         const q = String(a.name).toUpperCase();
         const all = [
           [802, 43, "QUITO"],
@@ -1137,6 +1139,9 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     });
     // Dropi guarda el teléfono nacional sin el 0: así se consulta la huella.
     expect(mcp.fpPhones[0]).toBe("991112233");
+    // Provincias y ciudades: el país se carga una vez (5 búsquedas) y luego se verifica sin
+    // consultar Dropi (ni en check_city ni al subir el pedido).
+    expect(mcp.citySearches).toEqual(["a", "e", "i", "o", "u"]);
     // Antes de crear: duplicados por teléfono (últimos días), stock/costo y cotización.
     expect(mcp.listArgs[0]).toHaveProperty("from");
     expect(mcp.productSearches[0]).toBe("Mega Red");
@@ -1153,13 +1158,16 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     const fp = (await h.call(o.cookie, "GET", fpUrl)).json();
     expect(fp.global).toMatchObject({ found: true, buyerType: "Comprador frecuente" });
     expect(fp.global.deliveryProbability).toBe(85);
-    expect(mcp.refreshes).toBe(1);
+    // La huella queda en caché: abrir la ficha otra vez no consulta a Dropi.
+    const fpCalls = mcp.fpPhones.length;
     expect((await h.call(o.cookie, "GET", fpUrl)).json().global.found).toBe(true);
-    expect(mcp.refreshes).toBe(1);
+    expect(mcp.fpPhones.length).toBe(fpCalls);
 
-    // Sin webhook: la consulta periódica trae la guía, y repetirla no duplica eventos.
+    // Sin webhook: la consulta periódica trae la guía (y renueva el acceso vencido una vez),
+    // y repetirla no duplica eventos.
     mcp.status["9001"] = "GUIA_GENERADA";
     expect((await dropiSync?.())?.updated).toBeGreaterThanOrEqual(1);
+    expect(mcp.refreshes).toBe(1);
     let detail = (await h.call(o.cookie, "GET", `/api/orders/${order.id}`)).json();
     expect(detail).toMatchObject({ stage: "guia_generada", trackingCode: "1800" });
     const dropiEvents = () =>

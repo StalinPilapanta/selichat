@@ -1,6 +1,6 @@
 import { schema, type Tx } from "@chatea/db";
 import { decryptSecret, normalizeRecipient } from "@chatea/shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { InboxEvent } from "../realtime.js";
 import { Graph, type OutgoingPayload } from "./graph.js";
 import { type InboundMessage, type ParsedWebhook, previewOf, type StatusUpdate } from "./parse.js";
@@ -219,6 +219,28 @@ export function toPayload(i: SendInput): OutgoingPayload {
  * Registra el mensaje saliente y lo envía a Meta. Si Meta falla, queda como "fallido"
  * con el error, para que la bandeja lo muestre y se pueda reintentar.
  */
+/**
+ * «Escribiendo…» en el chat del cliente sobre su último mensaje. Nunca falla: si Meta no lo
+ * acepta, la respuesta sale igual.
+ */
+export async function showTyping(tx: Tx, cfg: WaConfig, conversationId: string) {
+  const [row] = await tx
+    .select({ waId: messages.waMessageId, channel: channels })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .innerJoin(channels, eq(channels.id, conversations.channelId))
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.direction, "in")))
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+  if (!row?.waId) return false;
+  try {
+    await graphFor(row.channel, cfg).typing(row.channel.phoneNumberId, row.waId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function sendToConversation(
   tx: Tx,
   cfg: WaConfig,

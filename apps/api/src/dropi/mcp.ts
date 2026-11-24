@@ -386,6 +386,8 @@ class McpSession {
   }
 }
 
+const fingerprintCache = new Map<string, { at: number; fp: DropiFingerprint }>();
+
 const items = (d: Json): Json[] => {
   for (const k of ["items", "results", "data", "orders", "cities", "departments"])
     if (Array.isArray(d[k])) return (d[k] as unknown[]).filter(isObj);
@@ -396,6 +398,7 @@ const items = (d: Json): Json[] => {
 export class DropiMcpClient implements DropiApi {
   readonly mode = "mcp" as const;
   readonly key: string;
+  readonly placesKey: string;
   private readonly session: McpSession;
 
   constructor(
@@ -409,6 +412,7 @@ export class DropiMcpClient implements DropiApi {
       .update(`mcp|${tokens.clientId}|${tokens.refreshToken || tokens.accessToken}`)
       .digest("hex")
       .slice(0, 24);
+    this.placesKey = fetchImpl === fetch ? country : `${country}~${this.key}`;
     this.session = new McpSession(
       async () => {
         if (this.tokens.refreshToken && this.tokens.expiresAt - Date.now() < 60_000)
@@ -436,6 +440,14 @@ export class DropiMcpClient implements DropiApi {
     return items(await this.call("list_departments"))
       .map((d) => ({ id: Number(d.id), name: str(d.name), code: str(d.department_code) }))
       .filter((d) => d.id && d.name);
+  }
+
+  /** El país completo con 5 búsquedas (search_cities es por coincidencia parcial). */
+  async allCities(): Promise<DropiCity[]> {
+    const seen = new Map<number, DropiCity>();
+    for (const v of ["a", "e", "i", "o", "u"])
+      for (const c of await this.searchCities(v, "")) seen.set(c.id, c);
+    return [...seen.values()];
   }
 
   async searchCities(name: string, _rateType: string, departmentId?: number) {
@@ -548,7 +560,17 @@ export class DropiMcpClient implements DropiApi {
     };
   }
 
+  private productCache = new Map<number, { at: number; info: DropiProductInfo | null }>();
+
   async productInfo(id: number, nameHint: string): Promise<DropiProductInfo | null> {
+    const hit = this.productCache.get(id);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.info;
+    const info = await this.findProduct(id, nameHint);
+    this.productCache.set(id, { at: Date.now(), info });
+    return info;
+  }
+
+  private async findProduct(id: number, nameHint: string): Promise<DropiProductInfo | null> {
     // list_products busca el texto literal dentro del nombre: se prueba el nombre y su 1ª palabra.
     const words = nameHint.trim().split(/\s+/);
     const tries = [nameHint.trim(), words.find((w) => w.length >= 4) ?? ""].filter(Boolean);
@@ -581,6 +603,16 @@ export class DropiMcpClient implements DropiApi {
 
   /** Huella digital global de Dropi (compras del teléfono en todas las tiendas). */
   async fingerprint(phone: string): Promise<DropiFingerprint> {
+    // La huella cambia poco: se guarda 6 h por teléfono (la ficha la pide al abrir cada chat).
+    const hit = fingerprintCache.get(`${this.key}|${phone}`);
+    if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.fp;
+    const fp = await this.lookupFingerprint(phone);
+    if (fingerprintCache.size > 5000) fingerprintCache.clear();
+    fingerprintCache.set(`${this.key}|${phone}`, { at: Date.now(), fp });
+    return fp;
+  }
+
+  private async lookupFingerprint(phone: string): Promise<DropiFingerprint> {
     const digits = phone.replace(/\D/g, "");
     const dial = DROPI_COUNTRIES[this.country].dial;
     // Dropi guarda el número nacional (sin indicativo ni 0 inicial): se prueba ese primero.

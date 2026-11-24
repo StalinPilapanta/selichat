@@ -29,6 +29,9 @@ export const SERVIENTREGA_KIND = "servientrega";
 export type AgencyMode = "off" | "opcion" | "solo";
 export const AGENCY_MODES: AgencyMode[] = ["off", "opcion", "solo"];
 
+/** Tiempo máximo para ubicar la referencia del cliente en el mapa. */
+const GEO_BUDGET_MS = 6_000;
+
 /** Ciudades con hasta este número de agencias con retiro: se le muestran todas al cliente. */
 const MAX_LISTA = 10;
 
@@ -262,9 +265,13 @@ export async function findAgencies(
 
   const city = r.ciudad ? (ciudadDe(r.ciudad) ?? ciudad) : ciudad;
   if (opts.geocoder && city && ["falta_sector", "sin_ciudad", "cercanas"].includes(r.estado)) {
-    const geo = await opts.geocoder
-      .cercanasPorReferencia(city, [texto], opts.nombreCliente ?? "")
-      .catch(() => null);
+    // Con tope de tiempo: el cliente no espera al mapa; sin punto se usa lo del buscador.
+    const geo = await Promise.race([
+      opts.geocoder
+        .cercanasPorReferencia(city, [texto], opts.nombreCliente ?? "")
+        .catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), GEO_BUDGET_MS).unref?.()),
+    ]);
     if (geo?.agencias.length) {
       remember(geo.agencias);
       const previa = r.agencias[0];

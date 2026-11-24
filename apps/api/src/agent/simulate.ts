@@ -62,7 +62,15 @@ async function context(deps: SimDeps, tenantId: string, productId: string) {
     ? await agencyMode(deps.db, tenantId, deps.agencies.encryptionKey)
     : "off";
   const agencies = mode !== "off" ? deps.agencies : null;
-  return { tenant, resolved, dropi, agencies, agencyOnly: mode === "solo", ...loaded };
+  return {
+    tenant,
+    resolved,
+    dropi,
+    agencies,
+    agencyOnly: mode === "solo",
+    db: deps.db,
+    ...loaded,
+  };
 }
 
 /** Embudo inicial del producto, igual que el primer contacto real. */
@@ -112,7 +120,7 @@ async function agentReply(
       ...(dropi
         ? {
             checkCity: (ciudad: string, provincia?: string) =>
-              resolvePlace(dropi.client, dropi.config.options.rateType, ciudad, provincia),
+              resolvePlace(dropi.client, dropi.config.options.rateType, ciudad, provincia, c.db),
           }
         : {}),
       ...(agencies

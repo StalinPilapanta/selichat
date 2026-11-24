@@ -115,7 +115,17 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
   const scheduler = new AgentScheduler(
     (tenantId, conversationId) =>
       runSalesAgent(
-        { db, wa, bus, resolveModel, resolveTranscriber, dropi, agencies, log: app.log },
+        {
+          db,
+          wa,
+          bus,
+          resolveModel,
+          resolveTranscriber,
+          dropi,
+          agencies,
+          log: app.log,
+          typingPaceMs: env.NODE_ENV === "test" ? 0 : 25,
+        },
         tenantId,
         conversationId,
       ),

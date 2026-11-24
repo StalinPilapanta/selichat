@@ -5,6 +5,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -131,3 +132,23 @@ export const dropiRoutes = pgTable("dropi_routes", {
     .unique()
     .references(() => organization.id, { onDelete: "cascade" }),
 });
+
+/**
+ * Provincias y ciudades de Dropi por país (las mismas para todas las tiendas): se cargan una
+ * vez y la IA verifica ciudades sin consultar a Dropi en cada mensaje. Sin RLS: es catálogo
+ * geográfico, no datos de una tienda.
+ */
+export const dropiPlaces = pgTable(
+  "dropi_places",
+  {
+    country: text("country").notNull(),
+    kind: text("kind").notNull(), // department | city
+    id: integer("id").notNull(),
+    name: text("name").notNull(),
+    departmentId: integer("department_id"),
+    code: text("code").notNull().default(""), // department_code o cod_dane
+    zipCode: text("zip_code").notNull().default(""),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.country, t.kind, t.id] })],
+);
