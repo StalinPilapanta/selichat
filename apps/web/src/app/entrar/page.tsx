@@ -74,6 +74,16 @@ function LoginForm() {
             />
           </div>
         )}
+        {mode === "password" && (
+          <div className="-mt-2 text-right">
+            <Link
+              href="/olvide-clave"
+              className="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+            >
+              ¿Olvidaste tu contraseña?
+            </Link>
+          </div>
+        )}
         <ErrorText>{error}</ErrorText>
         <button type="submit" className="btn w-full" disabled={loading}>
           {mode === "password" ? "Entrar" : "Enviarme un enlace"}

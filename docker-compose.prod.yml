@@ -35,7 +35,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       SMTP_URL: ${SMTP_URL:-}
-      EMAIL_FROM: ${EMAIL_FROM:-Chatea <no-reply@example.com>}
+      EMAIL_FROM: ${EMAIL_FROM:-Selichat <no-reply@neolabsgroup.io>}
       WHATSAPP_GRAPH_VERSION: ${WHATSAPP_GRAPH_VERSION:-v27.0}
     volumes:
       - uploads:/app/data/uploads

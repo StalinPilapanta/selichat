@@ -31,14 +31,26 @@ export function createAuth(deps: { env: Env; db: Database; mail: Mailer }) {
         invitation: schema.invitation,
       },
     }),
-    emailAndPassword: { enabled: true, minPasswordLength: 8 },
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: 8,
+      // Al cambiar la clave se cierran las demás sesiones abiertas.
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url }) => {
+        await mail({
+          to: user.email,
+          subject: "Restablece tu contraseña de Selichat",
+          text: `Hola ${user.name},\n\nPara poner una contraseña nueva entra aquí (vence en 1 hora):\n${url}\n\nSi no lo pediste, ignora este correo.`,
+        });
+      },
+    },
     socialProviders: google,
     plugins: [
       magicLink({
         sendMagicLink: async ({ email, url }) => {
           await mail({
             to: email,
-            subject: "Tu enlace para entrar a Chatea",
+            subject: "Tu enlace para entrar a Selichat",
             text: `Entra aquí: ${url}`,
           });
         },
@@ -52,7 +64,7 @@ export function createAuth(deps: { env: Env; db: Database; mail: Mailer }) {
           const url = `${env.WEB_URL}/invitacion/${id}`;
           await mail({
             to: email,
-            subject: `${inviter.user.name} te invitó a ${org.name} en Chatea`,
+            subject: `${inviter.user.name} te invitó a ${org.name} en Selichat`,
             text: `Te invitaron como ${role}. Acepta la invitación aquí: ${url}`,
           });
         },
