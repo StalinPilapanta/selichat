@@ -9,6 +9,7 @@ import {
   type DropiOptions,
   decryptSecret,
   dropiOptionsSchema,
+  encryptSecret,
   LOCAL_STAGES,
   nationalPhone,
   normPlace,
@@ -18,10 +19,20 @@ import {
   stageFromDropi,
 } from "@chatea/shared";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { type DropiCity, DropiClient, type DropiDepartment, DropiError } from "../dropi/client.js";
+import {
+  type DropiApi,
+  type DropiCity,
+  DropiClient,
+  type DropiDepartment,
+  DropiError,
+  type DropiFingerprint,
+  type DropiOrderSummary,
+} from "../dropi/client.js";
+import { DropiMcpClient, type McpTokens } from "../dropi/mcp.js";
 import { loadProduct } from "../services/catalog.js";
 
-const { orders, orderEvents, integrations, conversations, contacts, tenantSettings } = schema;
+const { orders, orderEvents, integrations, conversations, contacts, tenantSettings, dropiRoutes } =
+  schema;
 type OrderCustomer = schema.OrderCustomer;
 type OrderItem = schema.OrderItem;
 type OrderRisk = schema.OrderRisk;
@@ -33,8 +44,13 @@ export interface DropiDeps {
   fetchImpl?: typeof fetch;
 }
 
+/** token = API de integraciones (token pegado); mcp = cuenta Dropi autorizada por OAuth. */
+export type DropiMode = "token" | "mcp";
+
 export interface DropiConfig {
+  mode: DropiMode;
   token: string;
+  mcp?: McpTokens;
   country: DropiCountry;
   options: DropiOptions;
 }
@@ -42,10 +58,33 @@ export interface DropiConfig {
 export function readDropiConfig(enc: string, key: string): DropiConfig {
   const raw = JSON.parse(decryptSecret(enc, key)) as Partial<DropiConfig>;
   return {
+    mode: raw.mode === "mcp" ? "mcp" : "token",
     token: raw.token ?? "",
+    mcp: raw.mcp,
     country: (raw.country ?? "EC") as DropiCountry,
     options: dropiOptionsSchema.parse(raw.options ?? {}),
   };
+}
+
+export function writeDropiConfig(cfg: DropiConfig, key: string) {
+  return encryptSecret(JSON.stringify(cfg), key);
+}
+
+/** Cliente según el modo; en MCP los tokens renovados se guardan cifrados en la integración. */
+export function dropiClient(deps: DropiDeps, tenantId: string, config: DropiConfig): DropiApi {
+  if (config.mode === "mcp" && config.mcp)
+    return new DropiMcpClient(
+      config.mcp,
+      config.country,
+      async (mcp) => {
+        const configEnc = writeDropiConfig({ ...config, mcp }, deps.encryptionKey);
+        await withTenant(deps.db, tenantId, (tx) =>
+          tx.update(integrations).set({ configEnc }).where(eq(integrations.kind, "dropi")),
+        );
+      },
+      deps.fetchImpl,
+    );
+  return new DropiClient(config.token, config.country, deps.fetchImpl);
 }
 
 export async function loadDropi(deps: DropiDeps, tenantId: string) {
@@ -54,58 +93,50 @@ export async function loadDropi(deps: DropiDeps, tenantId: string) {
   );
   if (row?.status !== "active") return null;
   const config = readDropiConfig(row.configEnc, deps.encryptionKey);
-  return { config, client: new DropiClient(config.token, config.country, deps.fetchImpl) };
+  return { config, client: dropiClient(deps, tenantId, config) };
 }
 
-// ---------- Ciudades (cobertura de Dropi), en memoria por cuenta ----------
+// ---------- Ciudades (cobertura de Dropi) ----------
 
-interface Places {
-  at: number;
-  departments: DropiDepartment[];
-  cities: Map<number, DropiCity[]>;
-}
-const PLACES_TTL = 12 * 3600_000;
-const placesCache = new Map<string, Places>();
+const deptCache = new Map<string, { at: number; list: DropiDepartment[] }>();
+const DEPT_TTL = 12 * 3600_000;
 
-async function places(client: DropiClient, rateType: string, departmentIds?: number[]) {
-  const key = `${client.key}|${rateType}`;
-  let p = placesCache.get(key);
-  if (!p || Date.now() - p.at > PLACES_TTL) {
-    p = { at: Date.now(), departments: await client.departments(), cities: new Map() };
-    placesCache.set(key, p);
-  }
-  for (const id of departmentIds ?? p.departments.map((d) => d.id)) {
-    if (!p.cities.has(id)) p.cities.set(id, await client.cities(id, rateType));
-  }
-  return p;
+async function departmentsOf(client: DropiApi) {
+  const c = deptCache.get(client.key);
+  if (c && Date.now() - c.at < DEPT_TTL) return c.list;
+  const list = await client.departments();
+  deptCache.set(client.key, { at: Date.now(), list });
+  return list;
 }
 
 export type PlaceResult =
-  | { ok: true; city: string; department: string }
+  | {
+      ok: true;
+      city: string;
+      department: string;
+      cityId?: number;
+      zipCode?: string;
+      daneCode?: string;
+    }
   | { ok: false; reason: string; options?: string[] };
 
 /** Valida ciudad (y provincia) contra la cobertura de Dropi; devuelve los nombres como los escribe Dropi. */
 export async function resolvePlace(
-  client: DropiClient,
+  client: DropiApi,
   rateType: string,
   ciudad: string,
   provincia?: string,
 ): Promise<PlaceResult> {
   const c = normPlace(ciudad);
   if (!c) return { ok: false, reason: "Falta la ciudad." };
-  const base = await places(client, rateType, []);
+  const departments = await departmentsOf(client);
   const pv = provincia ? normPlace(provincia) : "";
   const dept = pv
-    ? (base.departments.find((d) => normPlace(d.name) === pv) ??
-      base.departments.find(
-        (d) => normPlace(d.name).startsWith(pv) || pv.startsWith(normPlace(d.name)),
-      ))
+    ? (departments.find((d) => normPlace(d.name) === pv) ??
+      departments.find((d) => normPlace(d.name).startsWith(pv) || pv.startsWith(normPlace(d.name))))
     : undefined;
-  const p = await places(client, rateType, dept ? [dept.id] : undefined);
-  const depName = (id: number | null) => p.departments.find((d) => d.id === id)?.name ?? "";
-  const all = [...p.cities.entries()]
-    .filter(([id]) => !dept || id === dept.id)
-    .flatMap(([id, list]) => list.map((x) => ({ ...x, departmentId: x.departmentId ?? id })));
+  const depName = (id: number | null) => departments.find((d) => d.id === id)?.name ?? "";
+  const all = await client.searchCities(ciudad, rateType, dept?.id);
   let hits = all.filter((x) => normPlace(x.name) === c);
   if (!hits.length)
     hits = all.filter(
@@ -126,7 +157,14 @@ export async function resolvePlace(
         .slice(0, 8),
     };
   const hit = hits[0] as DropiCity;
-  return { ok: true, city: hit.name, department: depName(hit.departmentId) };
+  return {
+    ok: true,
+    city: hit.name,
+    department: depName(hit.departmentId),
+    cityId: hit.id,
+    zipCode: hit.zipCode ?? "",
+    daneCode: hit.codDane,
+  };
 }
 
 // ---------- Huella del comprador (pedidos de la tienda en Dropi) ----------
@@ -135,7 +173,7 @@ const historyCache = new Map<string, { at: number; list: { phone: string; status
 const HISTORY_TTL = 10 * 60_000;
 const HISTORY_MAX = 1000;
 
-export async function buyerHistory(client: DropiClient, phone: string) {
+export async function buyerHistory(client: DropiApi, phone: string) {
   let h = historyCache.get(client.key);
   if (!h || Date.now() - h.at > HISTORY_TTL) {
     const list: { phone: string; status: string }[] = [];
@@ -177,6 +215,87 @@ export function evaluateRisk(
     };
   return { ...h, blocked: false };
 }
+
+/**
+ * Huella global de Dropi (MCP). Sin pedidos finalizados (ambas probabilidades en 0) no hay
+ * datos suficientes: nunca bloquea.
+ */
+export function evaluateGlobalRisk(f: DropiFingerprint, rules: DropiOptions["risk"]): OrderRisk {
+  const base: OrderRisk = {
+    orders: 0,
+    delivered: 0,
+    returned: 0,
+    cancelled: 0,
+    deliveryRate: f.deliveryProbability,
+    blocked: false,
+    source: "dropi_global",
+    buyerType: f.buyerType,
+    riskLabel: f.riskLabel,
+    returnRate: f.returnProbability,
+  };
+  const hasData = (f.deliveryProbability ?? 0) > 0 || (f.returnProbability ?? 0) > 0;
+  if (!rules.enabled || !f.found || !hasData) return base;
+  if ((f.deliveryProbability ?? 100) < rules.minDeliveryRate)
+    return {
+      ...base,
+      blocked: true,
+      reason: `Según la huella de Dropi recibe el ${f.deliveryProbability}% de sus pedidos (${f.riskLabel || f.buyerType}); el mínimo es ${rules.minDeliveryRate}%.`,
+    };
+  return base;
+}
+
+/** Riesgo del comprador: huella global si la conexión es MCP; si no, historial de la tienda. */
+export async function buyerRisk(client: DropiApi, phone: string, rules: DropiOptions["risk"]) {
+  if (client.fingerprint) return evaluateGlobalRisk(await client.fingerprint(phone), rules);
+  return evaluateRisk(await buyerHistory(client, phone), rules);
+}
+
+// ---------- Pedido duplicado en Dropi (mismo teléfono, últimos días) ----------
+
+const INACTIVE = /CANCELAD|RECHAZAD|DEVOLUCI|DEVUELT|ANULAD/;
+const dupCache = new Map<string, { at: number; list: DropiOrderSummary[] }>();
+const DUP_TTL = 90_000;
+const ymd = (d: Date) => d.toISOString().slice(0, 10);
+
+/** Pedido ACTIVO en Dropi con ese teléfono en los últimos `days` días (como el bot de ventas). */
+export async function findDuplicate(client: DropiApi, phone: string, days: number) {
+  const tail = phone.replace(/\D/g, "").slice(-9);
+  if (tail.length < 9 || days <= 0) return null;
+  const key = `${client.key}|${days}`;
+  let c = dupCache.get(key);
+  if (!c || Date.now() - c.at > DUP_TTL) {
+    const now = new Date();
+    const range = {
+      from: ymd(new Date(now.getTime() - days * 86400_000)),
+      until: ymd(new Date(now.getTime() + 86400_000)),
+    };
+    const list: DropiOrderSummary[] = [];
+    for (let page = 0; page < 5; page++) {
+      const batch = await client.listOrders(page * 100, 100, range);
+      list.push(...batch);
+      if (batch.length < 100) break;
+    }
+    c = { at: Date.now(), list };
+    dupCache.set(key, c);
+  }
+  const since = Date.now() - days * 86400_000;
+  return (
+    c.list.find((o) => {
+      if (o.phone.replace(/\D/g, "").slice(-9) !== tail) return false;
+      if (INACTIVE.test(o.status.toUpperCase())) return false;
+      // El token no filtra por fecha: sin fecha legible no se puede afirmar que es reciente.
+      if (client.mode === "token") {
+        const t = Date.parse(o.createdAt);
+        return Number.isFinite(t) && t >= since;
+      }
+      return true;
+    }) ?? null
+  );
+}
+
+export const forgetDuplicates = (client: DropiApi) => {
+  for (const k of dupCache.keys()) if (k.startsWith(`${client.key}|`)) dupCache.delete(k);
+};
 
 // ---------- Crear pedido desde la conversación ----------
 
@@ -359,26 +478,100 @@ async function doUpload(
           : place.reason,
       );
 
-    // Huella del comprador con el historial de la tienda en Dropi (después de validar la ciudad).
+    // No se sube: queda en «Revisar» para que un dueño o administrador decida.
+    const hold = async (reason: string, extra: Partial<typeof orders.$inferInsert> = {}) => {
+      await withTenant(db, tenantId, async (tx) => {
+        await tx
+          .update(orders)
+          .set({ stage: "revision", uploadError: reason, ...extra })
+          .where(eq(orders.id, orderId));
+        await tx.insert(orderEvents).values({
+          orderId,
+          source: "sistema",
+          stage: "revision",
+          message: `No se subió: ${reason}`,
+        });
+      });
+      return { status: "revision" as const, reason };
+    };
+
+    // Huella del comprador (después de validar la ciudad).
     let risk: OrderRisk | null = null;
     if (config.options.risk.enabled) {
-      risk = evaluateRisk(await buyerHistory(client, c.telefono), config.options.risk);
-      if (risk.blocked && !opts.force) {
-        const blocked = risk;
-        await withTenant(db, tenantId, async (tx) => {
-          await tx
-            .update(orders)
-            .set({ stage: "revision", risk: blocked, uploadError: blocked.reason ?? null })
-            .where(eq(orders.id, orderId));
-          await tx.insert(orderEvents).values({
-            orderId,
-            source: "sistema",
-            stage: "revision",
-            message: `No se subió por riesgo: ${blocked.reason}`,
-            payload: { ...blocked },
-          });
-        });
-        return { status: "revision", reason: blocked.reason ?? "" };
+      risk = await buyerRisk(client, c.telefono, config.options.risk);
+      if (risk.blocked && !opts.force) return hold(`riesgo — ${risk.reason ?? ""}`, { risk });
+    }
+
+    // Ya hay un pedido activo con este teléfono en Dropi (doble confirmación, otro chat…).
+    if (!opts.force && config.options.duplicateDays > 0) {
+      const dup = await findDuplicate(client, c.telefono, config.options.duplicateDays).catch(
+        () => null,
+      );
+      if (dup)
+        return hold(
+          `ya existe en Dropi el pedido #${dup.id} (${dup.status || "activo"}) con este teléfono.`,
+        );
+    }
+
+    const products = order.items.map((i) => ({
+      id: Number(i.dropiProductId),
+      price: Number(i.unitPrice),
+      quantity: i.quantity,
+      ...(i.dropiVariationId ? { variation_id: Number(i.dropiVariationId) } : {}),
+    }));
+
+    // Stock y costo de proveedor: Dropi rechaza vender por debajo del costo.
+    if (config.options.checkStock && client.productInfo) {
+      for (const [k, i] of order.items.entries()) {
+        const p = products[k];
+        if (!p) continue;
+        const info = await client.productInfo(p.id, i.name).catch(() => null);
+        if (!info) continue;
+        if (info.stock != null && info.stock < p.quantity)
+          return fail(
+            `Sin stock en Dropi: «${info.name || i.name}» tiene ${info.stock} y el pedido lleva ${p.quantity}.`,
+          );
+        if (info.cost != null && p.price < info.cost)
+          return fail(
+            `El precio de «${info.name || i.name}» ($${p.price.toFixed(2)} c/u) es menor a su costo de proveedor en Dropi ($${info.cost.toFixed(2)}). Ajusta la oferta.`,
+          );
+      }
+    }
+
+    // Cotización: confirma cobertura y costo de envío antes de crear (como el bot de ventas).
+    let shippingCost: string | null = null;
+    if (config.options.quoteBeforeUpload && client.quote && place.cityId) {
+      const q = await client
+        .quote({
+          cityId: place.cityId,
+          zipCode: place.zipCode || null,
+          daneCode: place.daneCode || undefined,
+          cashOnDelivery: rateType === "CON RECAUDO",
+          products: products.map((x) => ({
+            id: x.id,
+            quantity: x.quantity,
+            price: x.price,
+            variationId: x.variation_id,
+          })),
+        })
+        .catch(() => null); // la cotización no responde: no se bloquea la venta
+      if (q?.options.length) {
+        const ok = q.options.filter((o) => o.cost != null);
+        const want = c.agencia ? "SERVIENTREGA" : "";
+        const pick = want
+          ? q.options.find((o) => o.carrier.toUpperCase().includes(want))
+          : ok.sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+        if (want && (!pick || pick.cost == null))
+          return fail(
+            `Servientrega no cotiza este envío${pick?.error ? `: ${pick.error}` : " (no aparece en la cotización)"}.`,
+          );
+        if (!want && !ok.length)
+          return fail(
+            `Ninguna transportadora pudo cotizar este envío: ${q.options
+              .map((o) => `${o.carrier} — ${o.error || "sin motivo"}`)
+              .join("; ")}`.slice(0, 400),
+          );
+        if (pick?.cost != null) shippingCost = pick.cost.toFixed(2);
       }
     }
 
@@ -388,8 +581,12 @@ async function doUpload(
       name: c.nombre,
       surname: c.apellido || ".",
       dir: c.agencia
-        ? [`RETIRO EN OFICINA: ${c.agencia}`, c.direccion].filter(Boolean).join(" — ")
+        ? c.agencia.includes("---")
+          ? c.agencia // NOMBRE---SECTOR---DIRECCIÓN, el formato de retiro de las guías
+          : [`RETIRO EN OFICINA: ${c.agencia}`, c.direccion].filter(Boolean).join(" — ")
         : [c.direccion, c.referencia].filter(Boolean).join(" — "),
+      // Retiro en agencia: la transportadora tiene que ser Servientrega.
+      ...(c.agencia ? { carrier: "SERVIENTREGA" } : {}),
       country: config.country,
       state: place.department,
       city: place.city,
@@ -399,15 +596,11 @@ async function doUpload(
       status: config.options.initialStatus,
       type: "FINAL_ORDER",
       rate_type: rateType,
-      products: order.items.map((i) => ({
-        id: Number(i.dropiProductId),
-        price: Number(i.unitPrice),
-        quantity: i.quantity,
-        ...(i.dropiVariationId ? { variation_id: Number(i.dropiVariationId) } : {}),
-      })),
+      products,
       calculate_costs_and_shiping: true,
       shop_order_id: order.id,
     });
+    forgetDuplicates(client);
     const stage = stageFromDropi(created.status) ?? "por_confirmar";
     await withTenant(db, tenantId, async (tx) => {
       await tx
@@ -420,6 +613,8 @@ async function doUpload(
           uploadError: null,
           uploadAttempts: order.uploadAttempts + 1,
           risk,
+          ...(shippingCost ? { shippingCost } : {}),
+          ...(c.agencia ? { carrier: "SERVIENTREGA" } : {}),
           customer: { ...c, ciudad: place.city, provincia: place.department },
         })
         .where(and(eq(orders.id, orderId), isNull(orders.dropiOrderId)));
@@ -482,13 +677,46 @@ export function parseDropiWebhook(body: unknown) {
   };
 }
 
-export async function applyDropiWebhook(db: Database, tenantId: string, body: unknown) {
+/** Se llama cuando un pedido cambia de etapa por Dropi (avisos al cliente). */
+export type OnStage = (tenantId: string, orderId: string, stage: OrderStage) => Promise<unknown>;
+
+export async function applyDropiWebhook(
+  db: Database,
+  tenantId: string,
+  body: unknown,
+  onStage?: OnStage,
+) {
   const ev = parseDropiWebhook(body);
   if (!ev.dropiOrderId) return { matched: false as const };
+  const r = await applyDropiStatus(db, tenantId, ev, isObj(body) ? body : { body });
+  if (r.matched && r.stageChanged) await onStage?.(tenantId, r.orderId, r.stage as OrderStage);
+  return r;
+}
+
+/** Aplica un estado de Dropi (webhook o consulta). Sin cambios no deja evento. */
+export async function applyDropiStatus(
+  db: Database,
+  tenantId: string,
+  ev: { dropiOrderId: string; status: string; trackingCode: string; carrier: string },
+  payload?: Record<string, unknown>,
+  opts: { onlyChanges?: boolean } = {},
+) {
   return withTenant(db, tenantId, async (tx) => {
     const [order] = await tx.select().from(orders).where(eq(orders.dropiOrderId, ev.dropiOrderId));
     if (!order) return { matched: false as const };
     const stage = stageFromDropi(ev.status);
+    const changed =
+      (ev.status && ev.status !== order.dropiStatus) ||
+      (ev.trackingCode && ev.trackingCode !== order.trackingCode) ||
+      (ev.carrier && ev.carrier !== order.carrier);
+    if (opts.onlyChanges && !changed)
+      return {
+        matched: true as const,
+        orderId: order.id,
+        stage: order.stage,
+        changed: false,
+        stageChanged: false,
+      };
     await tx
       .update(orders)
       .set({
@@ -506,8 +734,67 @@ export async function applyDropiWebhook(db: Database, tenantId: string, body: un
       message: [ev.status, ev.trackingCode && `guía ${ev.trackingCode}`, ev.carrier]
         .filter(Boolean)
         .join(" · "),
-      payload: isObj(body) ? body : { body },
+      payload: payload ?? null,
     });
-    return { matched: true as const, orderId: order.id, stage: stage ?? order.stage };
+    return {
+      matched: true as const,
+      orderId: order.id,
+      stage: stage ?? order.stage,
+      changed: true,
+      stageChanged: Boolean(stage && stage !== order.stage),
+    };
   });
+}
+
+/** Pedidos subidos que todavía pueden cambiar de estado. */
+const TRACKED: OrderStage[] = [
+  "por_confirmar",
+  "confirmado",
+  "guia_generada",
+  "en_transito",
+  "en_oficina",
+  "novedad",
+];
+
+/**
+ * Conexión MCP: no hay webhook, así que se consulta el estado de los pedidos vivos.
+ * Recorre las tiendas con Dropi conectado (dropi_routes no tiene RLS) y como mucho `perTenant`
+ * pedidos por tienda, empezando por los que llevan más tiempo sin actualizarse.
+ */
+export async function syncDropiStatuses(deps: DropiDeps, perTenant = 40, onStage?: OnStage) {
+  const tenants = await deps.db.select({ tenantId: dropiRoutes.tenantId }).from(dropiRoutes);
+  let updated = 0;
+  for (const { tenantId } of tenants) {
+    const dropi = await loadDropi(deps, tenantId).catch(() => null);
+    const getOrder = dropi?.client.getOrder?.bind(dropi.client);
+    if (!getOrder) continue;
+    const list = await withTenant(deps.db, tenantId, (tx) =>
+      tx
+        .select({ dropiOrderId: orders.dropiOrderId })
+        .from(orders)
+        .where(and(inArray(orders.stage, TRACKED), sql`${orders.dropiOrderId} is not null`))
+        .orderBy(orders.updatedAt)
+        .limit(perTenant),
+    );
+    for (const o of list) {
+      try {
+        const st = await getOrder(o.dropiOrderId as string);
+        if (!st) continue;
+        const r = await applyDropiStatus(
+          deps.db,
+          tenantId,
+          { dropiOrderId: o.dropiOrderId as string, ...st },
+          { ...st, via: "consulta" },
+          { onlyChanges: true },
+        );
+        if (r.matched && r.changed) updated++;
+        if (r.matched && r.stageChanged)
+          await onStage?.(tenantId, r.orderId, r.stage as OrderStage).catch(() => null);
+      } catch (e) {
+        if (!(e instanceof DropiError)) throw e;
+        if (e.status === 401 || e.status === 403) break; // autorización vencida: siguiente tienda
+      }
+    }
+  }
+  return { updated };
 }

@@ -11,8 +11,11 @@ import {
   type TranscriberResolver,
 } from "./ai/models.js";
 import { createAuth } from "./auth.js";
+import { Geocoder } from "./carriers/agencias-geo.js";
 import type { Env } from "./env.js";
 import { createMailer } from "./mailer.js";
+import { notifyStage, runPickupReminders } from "./orders/notify.js";
+import { type OnStage, syncDropiStatuses } from "./orders/service.js";
 import { RealtimeBus } from "./realtime.js";
 import { aiRoutes } from "./routes/ai.js";
 import { authRoutes } from "./routes/auth.js";
@@ -36,9 +39,13 @@ export interface AppDeps extends ImportDeps {
   dropiFetch?: typeof fetch;
   /** fetch hacia el buscador de agencias Servientrega (inyectable en pruebas). */
   agencyFetch?: typeof fetch;
+  /** fetch hacia el geocodificador (OpenStreetMap); en pruebas sin esto no se geocodifica. */
+  geoFetch?: typeof fetch;
   bus?: RealtimeBus;
   /** Para pruebas: acceso al scheduler del agente. */
   onScheduler?: (s: AgentScheduler) => void;
+  /** Para pruebas: corre la consulta de estados de Dropi (conexiones MCP) a demanda. */
+  onDropiSync?: (run: () => Promise<{ updated: number; reminders: number }>) => void;
 }
 
 export async function buildApp(env: Env, deps: AppDeps = {}) {
@@ -82,9 +89,26 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     fetchImpl: deps.metaFetch,
   };
   const dropi = { encryptionKey: env.ENCRYPTION_KEY, fetchImpl: deps.dropiFetch };
+  // Referencias del cliente → agencia más cercana (OpenStreetMap, 1 petición por segundo).
+  const geocoder = env.NODE_ENV === "test" && !deps.geoFetch ? null : new Geocoder(deps.geoFetch);
   const agencies = env.SERVIENTREGA_URL
-    ? { url: env.SERVIENTREGA_URL, fetchImpl: deps.agencyFetch }
+    ? {
+        url: env.SERVIENTREGA_URL,
+        encryptionKey: env.ENCRYPTION_KEY,
+        fetchImpl: deps.agencyFetch,
+        geocoder,
+      }
     : undefined;
+  // Avisos al cliente cuando el pedido llega a la agencia o tiene novedad.
+  const onStage: OnStage = (tenantId, orderId, stage) =>
+    notifyStage({ db, ...dropi, wa, bus }, tenantId, orderId, stage).catch((err) =>
+      app.log.error({ err, orderId }, "falló el aviso del pedido"),
+    );
+  const dropiPass = async () => {
+    const { updated } = await syncDropiStatuses({ db, ...dropi }, 40, onStage);
+    const { sent } = await runPickupReminders({ db, ...dropi, wa, bus });
+    return { updated, reminders: sent };
+  };
   const resolveModel = deps.resolveModel ?? createModelResolver(db, env.ENCRYPTION_KEY);
   const resolveTranscriber =
     deps.resolveTranscriber ?? createTranscriberResolver(db, env.ENCRYPTION_KEY);
@@ -100,6 +124,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
       app.log.error({ err: e, conversationId }, "error en el turno del agente"),
   );
   deps.onScheduler?.(scheduler);
+  deps.onDropiSync?.(dropiPass);
   // Recordatorios automáticos (Catálogo → Seguimiento). Una pasada a la vez.
   let followUpsBusy = false;
   const followUpsTimer =
@@ -117,6 +142,23 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
         }, env.FOLLOWUPS_INTERVAL_MS)
       : null;
   followUpsTimer?.unref();
+  // Estados de Dropi (conexiones por cuenta/MCP, sin webhook) y recordatorios de retiro.
+  let dropiSyncBusy = false;
+  const dropiSyncTimer =
+    env.DROPI_SYNC_INTERVAL_MS > 0 && env.NODE_ENV !== "test"
+      ? setInterval(async () => {
+          if (dropiSyncBusy) return;
+          dropiSyncBusy = true;
+          try {
+            await dropiPass();
+          } catch (err) {
+            app.log.error({ err }, "falló la consulta de estados en Dropi");
+          } finally {
+            dropiSyncBusy = false;
+          }
+        }, env.DROPI_SYNC_INTERVAL_MS)
+      : null;
+  dropiSyncTimer?.unref();
   await app.register(whatsappRoutes, {
     auth,
     db,
@@ -131,6 +173,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     dropi,
     publicBaseUrl: env.WEB_URL,
     agencyUrl: env.SERVIENTREGA_URL,
+    onStage,
   });
   await app.register(inboxRoutes, { auth, db, bus, wa, uploadDir: env.UPLOAD_DIR });
   await app.register(uploadRoutes, {
@@ -149,6 +192,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
   app.addHook("onClose", async () => {
     scheduler.stop();
     if (followUpsTimer) clearInterval(followUpsTimer);
+    if (dropiSyncTimer) clearInterval(dropiSyncTimer);
     await client.end();
   });
   return app;

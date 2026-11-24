@@ -18,7 +18,7 @@ import { generateText, type ModelMessage, stepCountIs, tool } from "ai";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { ResolvedModel } from "../ai/models.js";
-import type { Agency } from "../carriers/servientrega.js";
+import type { Agency, AgencySearch } from "../carriers/servientrega.js";
 import { activePrompt, catalogForPrompt, loadProduct } from "../services/catalog.js";
 import type { SendInput } from "../whatsapp/service.js";
 
@@ -132,15 +132,28 @@ export interface TurnIO {
     | { ok: false; reason: string; options?: string[] }
   >;
   /** Agencias de Servientrega cerca de lo que dijo el cliente (si la tienda lo activó). */
-  findAgencies?(texto: string): Promise<{ ciudad: string | null; agencias: Agency[] }>;
+  findAgencies?(texto: string, hint?: { ciudad?: string }): Promise<AgencySearch>;
+  /** Valida la agencia elegida (registro o nombre de una agencia mostrada). */
+  chooseAgency?(value: string): Promise<Agency | null>;
 }
 
-const AGENCY_PROMPT = `- find_agencies: cuando el cliente dé su ciudad y sector (o pregunte por retirar en oficina), busca las agencias de Servientrega cercanas y ofrécele retirar ahí como alternativa a la entrega a domicilio: nombre, dirección y horario, priorizando las que "entregan en oficina" (las que no, NO las ofrezcas para retiro). Si elige una, regístrala con update_order_data en el campo agencia (nombre y dirección). No inventes agencias.`;
+const AGENCY_STEPS = `  · find_agencies con la ciudad y el sector, barrio o una referencia tal como lo dijo el cliente (si lo corrige, usa lo más reciente). Según "estado": unica → confírmale esa agencia; cercanas → ofrécele la primera como la más cercana y las otras como opción; lista → muéstralas numeradas (nombre corto y dirección) y pídele que responda con el número; falta_sector → pídele el sector o barrio, o una referencia (parque, colegio, avenida, centro comercial), y vuelve a buscar; sin_retiro o sin_ciudad → explícale con amabilidad y pide otra zona o ciudad.
+  · Si el cliente nombra una zona o agencia ("Huachi Grande", "la del centro"), relaciónala con las mostradas; si no está, búscala con find_agencies.
+  · Cuando elija, llama choose_agency con el "registro" exacto de esa agencia: eso deja agencia, ciudad y provincia en el pedido. Nunca escribas la agencia a mano con update_order_data ni inventes agencias; solo se ofrecen las que devuelve la herramienta (todas entregan en oficina).
+  · Al confirmar el pedido, dile la agencia donde retira (nombre, dirección y horario de lunes a viernes y sábados si aplica) y que le avisaremos cuando el paquete llegue.`;
+
+const AGENCY_PROMPT_OPCION = `- Retiro en agencia Servientrega (opcional): cuando el cliente dé su ciudad, ofrécele retirar el pedido en una agencia Servientrega cercana como alternativa a la entrega a domicilio. Si prefiere la agencia:
+${AGENCY_STEPS}`;
+
+const AGENCY_PROMPT_SOLO = `- ENTREGA EN AGENCIA SERVIENTREGA (regla de la tienda, tiene prioridad sobre el guion): todos los pedidos se envían a una agencia Servientrega donde el cliente retira y paga; NO hay entrega a domicilio, así que no pidas dirección de domicilio. Los datos de entrega son: nombre y apellido, ciudad y la agencia elegida. Pide ciudad y sector o barrio donde le quede mejor retirarlo:
+${AGENCY_STEPS}`;
 
 const CITY_PROMPT = `- check_city: apenas el cliente diga su ciudad, verifícala (con su provincia si la dio). Si hay varias con ese nombre, pregúntale la provincia; si no hay cobertura, díselo con amabilidad y pide otra ciudad o una dirección cercana.`;
 
 export interface TurnInput {
   resolved: ResolvedModel;
+  /** La tienda solo envía a agencia: la agencia reemplaza a la dirección (obligatoria). */
+  agencyOnly?: boolean;
   prompt: AgentPrompt;
   /** ¿La conversación ya tiene producto? (si no, se ofrece select_product) */
   hasProduct: boolean;
@@ -174,11 +187,13 @@ export async function runAgentTurn(t: TurnInput): Promise<TurnResult> {
   // OpenAI, xAI y Gemini cachean prefijos automáticamente). Lo que cambia va después.
   const checkCity = t.io.checkCity?.bind(t.io);
   const findAgencies = t.io.findAgencies?.bind(t.io);
+  const chooseAgency = t.io.chooseAgency?.bind(t.io);
+  const rules = { agencyOnly: Boolean(t.agencyOnly && findAgencies) };
+  const agencyPrompt =
+    findAgencies && (rules.agencyOnly ? AGENCY_PROMPT_SOLO : AGENCY_PROMPT_OPCION);
   const stableSystem = [
     t.prompt.text,
-    [TOOLS_PROMPT, checkCity && CITY_PROMPT, findAgencies && AGENCY_PROMPT]
-      .filter(Boolean)
-      .join("\n"),
+    [TOOLS_PROMPT, checkCity && CITY_PROMPT, agencyPrompt].filter(Boolean).join("\n"),
     mediaList ? `Recursos disponibles para send_media:\n${mediaList}` : "",
   ]
     .filter(Boolean)
@@ -187,7 +202,7 @@ export async function runAgentTurn(t: TurnInput): Promise<TurnResult> {
 - Fecha y hora local: ${now}
 - Nombre de WhatsApp del cliente: ${t.context.customerName}
 - Teléfono del cliente: ${t.context.phone}
-${describeCheckout(t.checkout)}`;
+${describeCheckout(t.checkout, rules)}`;
 
   const outbox: SendInput[] = [];
   const calls: { name: string; input: unknown }[] = [];
@@ -209,7 +224,7 @@ ${describeCheckout(t.checkout)}`;
           etapa: state.etapa === "confirmado" ? "confirmado" : "datos",
         };
         await t.io.saveCheckout(state);
-        return { ok: true, faltan: missingCheckoutFields(state) };
+        return { ok: true, faltan: missingCheckoutFields(state, rules) };
       },
     }),
     confirm_order: tool({
@@ -217,7 +232,7 @@ ${describeCheckout(t.checkout)}`;
       inputSchema: z.object({}),
       execute: async () => {
         calls.push({ name: "confirm_order", input: {} });
-        const faltan = missingCheckoutFields(state);
+        const faltan = missingCheckoutFields(state, rules);
         if (faltan.length) return { ok: false, faltan };
         state = { ...state, etapa: "confirmado" };
         await t.io.saveCheckout(state, CONFIRMED_LABEL);
@@ -289,22 +304,91 @@ ${describeCheckout(t.checkout)}`;
       ? {
           find_agencies: tool({
             description:
-              "Busca agencias de Servientrega cercanas a la ciudad y sector que indicó el cliente.",
+              "Busca las agencias Servientrega con retiro en oficina para la ciudad y el sector, barrio o referencia del cliente.",
             inputSchema: z.object({
-              texto: z.string().min(2).max(200).describe("Ciudad y sector o calles del cliente"),
+              texto: z
+                .string()
+                .min(2)
+                .max(200)
+                .describe("Ciudad y sector, barrio, calles o referencia, como lo dijo el cliente"),
             }),
             execute: async ({ texto }) => {
               calls.push({ name: "find_agencies", input: { texto } });
               try {
-                const r = await findAgencies(texto);
-                if (!r.agencias.length)
-                  return { ok: false, motivo: "No hay agencias de Servientrega en esa zona." };
-                return { ok: true, ciudad: r.ciudad, agencias: r.agencias };
+                const r = await findAgencies(texto, { ciudad: state.ciudad });
+                return {
+                  ok: r.agencias.length > 0 || r.estado === "falta_sector",
+                  estado: r.estado,
+                  ciudad: r.ciudad,
+                  agenciasConRetiroEnLaCiudad: r.totalCiudad,
+                  nota: r.nota || undefined,
+                  agencias: r.agencias.map((a) => ({
+                    registro: a.registro,
+                    nombre: a.nombreCorto,
+                    direccion: a.direccion,
+                    sector: a.sector,
+                    horario: a.horario,
+                    sabados: a.finDeSemana,
+                    ...("distanciaKm" in a && typeof a.distanciaKm === "number"
+                      ? { distanciaKm: a.distanciaKm }
+                      : {}),
+                  })),
+                };
               } catch {
                 return { ok: false, motivo: "No se pudo consultar las agencias ahora." };
               }
             },
           }),
+          ...(chooseAgency
+            ? {
+                choose_agency: tool({
+                  description:
+                    "Registra la agencia Servientrega que eligió el cliente (el registro que devolvió find_agencies).",
+                  inputSchema: z.object({ registro: z.string().min(3).max(300) }),
+                  execute: async ({ registro }) => {
+                    calls.push({ name: "choose_agency", input: { registro } });
+                    const a = await chooseAgency(registro).catch(() => null);
+                    if (!a)
+                      return {
+                        ok: false,
+                        motivo: "Esa agencia no está en la búsqueda: vuelve a usar find_agencies.",
+                      };
+                    if (!a.entregaEnOficina)
+                      return { ok: false, motivo: "Esa agencia no entrega paquetes al cliente." };
+                    let ciudad = a.ciudad;
+                    let provincia = a.provincia;
+                    let aviso: string | undefined;
+                    // El destino en Dropi es la ciudad de la agencia: se valida su cobertura.
+                    if (checkCity) {
+                      const c = await checkCity(a.ciudad, a.provincia).catch(() => null);
+                      if (c?.ok) {
+                        ciudad = c.city;
+                        provincia = c.department;
+                      } else if (c && !c.ok) aviso = c.reason;
+                    }
+                    state = {
+                      ...state,
+                      agencia: a.registro,
+                      ciudad,
+                      provincia,
+                      etapa: state.etapa === "confirmado" ? "confirmado" : "datos",
+                    };
+                    await t.io.saveCheckout(state);
+                    return {
+                      ok: true,
+                      agencia: a.nombreCorto,
+                      direccion: a.direccion,
+                      horario: a.horario,
+                      sabados: a.finDeSemana,
+                      ciudad,
+                      provincia,
+                      aviso,
+                      faltan: missingCheckoutFields(state, rules),
+                    };
+                  },
+                }),
+              }
+            : {}),
         }
       : {}),
     ...(!t.hasProduct

@@ -1,5 +1,5 @@
 "use client";
-import { LOCAL_STAGES, ORDER_STAGES, type OrderStage } from "@chatea/shared";
+import { agencyLabel, LOCAL_STAGES, ORDER_STAGES, type OrderStage } from "@chatea/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -13,10 +13,14 @@ type Customer = {
   ciudad: string;
   direccion: string;
   referencia?: string;
+  /** Retiro en agencia: NOMBRE---SECTOR---DIRECCIÓN. */
+  agencia?: string;
 };
 type Order = {
   id: string;
   stage: OrderStage;
+  /** Desde cuándo está en la etapa actual (según Dropi). */
+  stageSince?: string | null;
   source: string;
   customer: Customer;
   items: { name: string; quantity: number; unitPrice: string; variant?: string }[];
@@ -78,6 +82,23 @@ function StageBadge({ stage }: { stage: OrderStage }) {
   );
 }
 
+/** Días en la agencia sin retirar: a partir de 2 se marca para llamar al cliente. */
+function DaysInAgency({ since }: { since?: string | null }) {
+  if (!since) return null;
+  const days = Math.floor((Date.now() - new Date(since).getTime()) / 86400_000);
+  const tone =
+    days >= 4
+      ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200"
+      : days >= 2
+        ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+        : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
+  return (
+    <span className={`rounded-full px-1.5 py-0.5 text-[11px] ${tone}`}>
+      {days === 0 ? "llegó hoy" : `${days} día${days === 1 ? "" : "s"} en agencia`}
+    </span>
+  );
+}
+
 function Card({ o, onOpen }: { o: Order; onOpen: () => void }) {
   return (
     <button
@@ -95,6 +116,7 @@ function Card({ o, onOpen }: { o: Order; onOpen: () => void }) {
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <StageBadge stage={o.stage} />
         {o.dropiOrderId && <span className="text-[11px] text-zinc-500">#{o.dropiOrderId}</span>}
+        {o.stage === "en_oficina" && <DaysInAgency since={o.stageSince} />}
       </div>
       {o.uploadError && (
         <p className="mt-1 line-clamp-2 text-[11px] text-red-600 dark:text-red-400">
@@ -252,6 +274,12 @@ function OrderPanel({
 
             <div className="space-y-2">
               <h3 className="text-sm font-medium">Datos de entrega</h3>
+              {o.customer.agencia && (
+                <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm dark:border-sky-900 dark:bg-sky-950">
+                  <span className="font-medium">Retira en agencia Servientrega:</span>{" "}
+                  {agencyLabel(o.customer.agencia)}
+                </p>
+              )}
               {FIELDS.map((f) => (
                 <label key={f.key} className="block text-sm">
                   <span className="label">{f.label}</span>

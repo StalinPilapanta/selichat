@@ -51,6 +51,11 @@ export interface OrderRisk {
   deliveryRate: number | null;
   blocked: boolean;
   reason?: string;
+  /** tienda = historial de la tienda (token); dropi_global = huella digital de Dropi (MCP). */
+  source?: "tienda" | "dropi_global";
+  buyerType?: string;
+  riskLabel?: string;
+  returnRate?: number | null;
 }
 
 /**

@@ -19,6 +19,8 @@ const schema = z.object({
   AGENT_DEBOUNCE_MS: z.coerce.number().int().min(0).default(6000),
   /** Cada cuánto se revisan los recordatorios automáticos; 0 = desactivado. */
   FOLLOWUPS_INTERVAL_MS: z.coerce.number().int().min(0).default(60_000),
+  /** Consulta de estados en Dropi para tiendas conectadas por cuenta (MCP); 0 = apagado. */
+  DROPI_SYNC_INTERVAL_MS: z.coerce.number().int().min(0).default(600_000),
   /** Buscador de agencias Servientrega (servicio servientrega-ubicaciones). Vacío = desactivado. */
   SERVIENTREGA_URL: z.string().default("https://servientrega.neolabsgroup.io"),
   /** Versión de la Graph API de Meta para WhatsApp Cloud. */

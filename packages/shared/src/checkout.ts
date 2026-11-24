@@ -40,19 +40,40 @@ export type CheckoutState = z.infer<typeof checkoutUpdateSchema>;
 /** Campos obligatorios para dar el pedido por confirmado. */
 export const CHECKOUT_REQUIRED: CheckoutField[] = ["nombre", "ciudad", "direccion", "cantidad"];
 
-export function missingCheckoutFields(s: CheckoutState): CheckoutField[] {
+export interface CheckoutRules {
+  /** La tienda solo envía a agencia (retiro en oficina): la agencia es obligatoria. */
+  agencyOnly?: boolean;
+}
+
+export function missingCheckoutFields(
+  s: CheckoutState,
+  rules: CheckoutRules = {},
+): CheckoutField[] {
+  if (rules.agencyOnly)
+    return CHECKOUT_REQUIRED.map((k) => (k === "direccion" ? "agencia" : k)).filter(
+      (k) => !s[k]?.trim(),
+    );
   // Si retira en agencia, la agencia reemplaza a la dirección de entrega.
   return CHECKOUT_REQUIRED.filter(
     (k) => !s[k]?.trim() && !(k === "direccion" && s.agencia?.trim()),
   );
 }
 
+/** Agencia registrada «NOMBRE---SECTOR---DIRECCIÓN» (formato de las guías) legible. */
+export function agencyLabel(v: string | undefined): string {
+  return (v ?? "")
+    .split("---")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** Resumen legible para el prompt del agente. */
-export function describeCheckout(s: CheckoutState): string {
+export function describeCheckout(s: CheckoutState, rules: CheckoutRules = {}): string {
   const lines = (Object.keys(CHECKOUT_FIELDS) as CheckoutField[])
     .filter((k) => s[k]?.trim())
-    .map((k) => `- ${CHECKOUT_FIELDS[k]}: ${s[k]}`);
-  const missing = missingCheckoutFields(s).map((k) => CHECKOUT_FIELDS[k]);
+    .map((k) => `- ${CHECKOUT_FIELDS[k]}: ${k === "agencia" ? agencyLabel(s[k]) : s[k]}`);
+  const missing = missingCheckoutFields(s, rules).map((k) => CHECKOUT_FIELDS[k]);
   return [
     `Etapa: ${s.etapa ?? "descubrimiento"}`,
     lines.length

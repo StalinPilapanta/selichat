@@ -20,7 +20,8 @@ import {
   type TranscriberResolver,
   VISION_KINDS,
 } from "../ai/models.js";
-import { agenciesEnabled, findAgencies } from "../carriers/servientrega.js";
+import type { Geocoder } from "../carriers/agencias-geo.js";
+import { agencyMode, findAgencies, resolveAgency } from "../carriers/servientrega.js";
 import {
   createOrderFromConversation,
   type DropiDeps,
@@ -37,6 +38,15 @@ import { prepareTurnMedia } from "./media.js";
 
 const { conversations, contacts, messages, products, agentRuns, tenantSettings } = schema;
 
+/** Buscador de agencias Servientrega (URL de la plataforma). */
+export interface AgencyDeps {
+  url: string;
+  encryptionKey: string;
+  fetchImpl?: typeof fetch;
+  /** Ubica referencias del cliente en el mapa (null = no geocodificar). */
+  geocoder?: Geocoder | null;
+}
+
 export interface AgentDeps {
   db: Database;
   wa: WaConfig;
@@ -47,7 +57,7 @@ export interface AgentDeps {
   /** Pedidos → Dropi (sin esto, confirmar no crea el pedido). */
   dropi?: Omit<DropiDeps, "db">;
   /** Buscador de agencias Servientrega (URL de la plataforma). */
-  agencies?: { url: string; fetchImpl?: typeof fetch };
+  agencies?: AgencyDeps;
   log?: { warn: (o: object, m: string) => void; error: (o: object, m: string) => void };
 }
 
@@ -154,8 +164,10 @@ export async function runSalesAgent(
   if (!prompt) return { status: "omitido", reason: "producto_no_existe" };
 
   const dropi = deps.dropi ? await loadDropi({ db, ...deps.dropi }, tenantId) : null;
-  const agencies =
-    deps.agencies?.url && (await agenciesEnabled(db, tenantId)) ? deps.agencies : null;
+  const mode = deps.agencies?.url
+    ? await agencyMode(db, tenantId, deps.agencies.encryptionKey)
+    : "off";
+  const agencies = mode !== "off" ? deps.agencies : null;
 
   const started = Date.now();
   let turn: Awaited<ReturnType<typeof runAgentTurn>>;
@@ -164,6 +176,7 @@ export async function runSalesAgent(
     turn = await runAgentTurn({
       resolved,
       prompt,
+      agencyOnly: mode === "solo",
       hasProduct: Boolean(conv.productId),
       checkout: (conv.checkoutState ?? {}) as CheckoutState,
       context: {
@@ -187,8 +200,14 @@ export async function runSalesAgent(
           : {}),
         ...(agencies
           ? {
-              findAgencies: (texto: string) =>
-                findAgencies(agencies.url, texto, agencies.fetchImpl),
+              findAgencies: (texto: string, hint?: { ciudad?: string }) =>
+                findAgencies(agencies.url, texto, agencies.fetchImpl, {
+                  ciudad: hint?.ciudad,
+                  geocoder: agencies.geocoder,
+                  nombreCliente: [contact.name, contact.profileName].filter(Boolean).join(" "),
+                }),
+              chooseAgency: (value: string) =>
+                resolveAgency(agencies.url, value, agencies.fetchImpl),
             }
           : {}),
         selectProduct: (productId) =>

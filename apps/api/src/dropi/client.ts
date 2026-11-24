@@ -28,6 +28,7 @@ export interface DropiCity {
   name: string;
   departmentId: number | null;
   codDane: string;
+  zipCode?: string;
 }
 export interface DropiOrderSummary {
   id: string;
@@ -35,6 +36,65 @@ export interface DropiOrderSummary {
   phone: string;
   createdAt: string;
 }
+export interface DropiOrderStatus {
+  status: string;
+  trackingCode: string;
+  carrier: string;
+}
+/** Huella digital global de Dropi (solo por MCP). */
+export interface DropiFingerprint {
+  found: boolean;
+  buyerType: string;
+  riskLabel: string;
+  /** % de pedidos entregados (sobre el total, incluidos los que van en camino). */
+  deliveryProbability: number | null;
+  returnProbability: number | null;
+  message: string;
+}
+
+export interface DropiQuote {
+  currency: string;
+  options: { carrier: string; cost: number | null; error: string }[];
+}
+export interface DropiProductInfo {
+  id: string;
+  name: string;
+  stock: number | null;
+  /** Costo de proveedor (Dropi rechaza vender por debajo). */
+  cost: number | null;
+}
+
+/** Lo que Selichat usa de Dropi; lo implementan el cliente por token y el cliente MCP. */
+export interface DropiApi {
+  readonly mode: "token" | "mcp";
+  /** Identifica la cuenta para cachés en memoria sin guardar el token. */
+  readonly key: string;
+  readonly country: DropiCountry;
+  departments(): Promise<DropiDepartment[]>;
+  /** Ciudades con ese nombre (exacto o parcial), opcionalmente dentro de una provincia. */
+  searchCities(name: string, rateType: string, departmentId?: number): Promise<DropiCity[]>;
+  createOrder(payload: DropiOrderPayload): Promise<{ id: string; status: string }>;
+  /** Órdenes recientes; `range` (YYYY-MM-DD) solo lo respeta MCP (el token trae las últimas). */
+  listOrders(
+    start: number,
+    count: number,
+    range?: { from: string; until: string },
+  ): Promise<DropiOrderSummary[]>;
+  /** Cotiza el envío (MCP). */
+  quote?(p: {
+    cityId: number;
+    zipCode: string | null;
+    daneCode?: string;
+    cashOnDelivery: boolean;
+    products: { id: number; quantity: number; price: number; variationId?: number }[];
+    direction?: string;
+  }): Promise<DropiQuote>;
+  /** Stock y costo de proveedor de un producto (MCP; busca por nombre y compara el id). */
+  productInfo?(id: number, nameHint: string): Promise<DropiProductInfo | null>;
+  getOrder?(id: string): Promise<DropiOrderStatus | null>;
+  fingerprint?(phone: string): Promise<DropiFingerprint>;
+}
+
 export interface DropiOrderPayload {
   total_order: number;
   notes: string;
@@ -53,6 +113,8 @@ export interface DropiOrderPayload {
   products: { id: number; price: number; quantity: number; variation_id?: number }[];
   calculate_costs_and_shiping: true;
   shop_order_id: string;
+  /** Transportadora fija por nombre (solo MCP; la API por token la elige Dropi). */
+  carrier?: string;
 }
 
 type Json = Record<string, unknown>;
@@ -79,9 +141,15 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? n : null;
 };
 
-export class DropiClient {
+const PLACES_TTL = 12 * 3600_000;
+const placesCache = new Map<
+  string,
+  { at: number; departments: DropiDepartment[]; cities: Map<number, DropiCity[]> }
+>();
+
+export class DropiClient implements DropiApi {
+  readonly mode = "token" as const;
   readonly base: string;
-  /** Identifica la cuenta para cachés en memoria sin guardar el token. */
   readonly key: string;
 
   constructor(
@@ -140,6 +208,41 @@ export class DropiClient {
       .filter((d) => d.id && d.name);
   }
 
+  /**
+   * Busca por nombre entre las ciudades con cobertura (la API de integraciones solo lista por
+   * provincia, así que se cargan y se guardan 12 h en memoria).
+   */
+  async searchCities(name: string, rateType: string, departmentId?: number) {
+    const key = `${this.key}|${rateType}`;
+    let p = placesCache.get(key);
+    if (!p || Date.now() - p.at > PLACES_TTL) {
+      p = { at: Date.now(), departments: await this.departments(), cities: new Map() };
+      placesCache.set(key, p);
+    }
+    const ids = departmentId ? [departmentId] : p.departments.map((d) => d.id);
+    const norm = (v: string) =>
+      v
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .trim();
+    const q = norm(name);
+    const out: DropiCity[] = [];
+    for (const id of ids) {
+      let list = p.cities.get(id);
+      if (!list) {
+        list = await this.cities(id, rateType);
+        p.cities.set(id, list);
+      }
+      for (const c of list) {
+        const n = norm(c.name);
+        if (q && (n.includes(q) || q.startsWith(`${n} `)))
+          out.push({ ...c, departmentId: c.departmentId ?? id });
+      }
+    }
+    return out;
+  }
+
   /** Ciudades con cobertura en una provincia/departamento. Dropi repite la ciudad por transportadora. */
   async cities(departmentId: number, rateType: string): Promise<DropiCity[]> {
     const raw = rows(
@@ -168,7 +271,8 @@ export class DropiClient {
 
   /** Crea la orden; devuelve el id y el estado que asignó Dropi. */
   async createOrder(payload: DropiOrderPayload): Promise<{ id: string; status: string }> {
-    const d = await this.call<Json>("POST", "orders/myorders", payload);
+    const { carrier: _carrier, ...body } = payload;
+    const d = await this.call<Json>("POST", "orders/myorders", body);
     const o = isObj(d.objects) ? d.objects : {};
     const id = str(o.id ?? d.id);
     if (!id) throw new DropiError("Dropi no devolvió el número de la orden.");

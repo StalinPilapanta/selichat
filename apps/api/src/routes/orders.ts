@@ -3,6 +3,7 @@ import { type Database, schema, withTenant } from "@chatea/db";
 import {
   DROPI_COUNTRIES,
   type DropiCountry,
+  decryptSecret,
   dropiOptionsSchema,
   encryptSecret,
   LOCAL_STAGES,
@@ -10,34 +11,49 @@ import {
   ORDER_STAGE_KEYS,
   type OrderStage,
 } from "@chatea/shared";
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
-import { agenciesEnabled, setAgenciesEnabled } from "../carriers/servientrega.js";
+import {
+  AGENCY_MODES,
+  type AgencyMode,
+  agencyMode,
+  setAgencyMode,
+} from "../carriers/servientrega.js";
 import { DropiClient, DropiError } from "../dropi/client.js";
+import { authorizeUrl, exchangeCode, pkce, registerClient } from "../dropi/mcp.js";
 import {
   applyDropiWebhook,
   buyerHistory,
   createOrderFromConversation,
+  type DropiConfig,
   type DropiDeps,
+  dropiClient,
   loadDropi,
+  type OnStage,
   OrderError,
   readDropiConfig,
   uploadOrder,
+  writeDropiConfig,
 } from "../orders/service.js";
 import { requireTenant } from "../plugins/tenant.js";
 
 const { integrations, dropiRoutes, orders, orderEvents, contacts, conversations, auditLog } =
   schema;
 const isUuid = (v: string) => z.uuid().safeParse(v).success;
+const countryEnum = z.enum(Object.keys(DROPI_COUNTRIES) as [DropiCountry, ...DropiCountry[]]);
+/** Vigencia del enlace de autorización de Dropi. */
+const OAUTH_TTL = 15 * 60_000;
 
 const dropiBody = z.object({
   /** Vacío = mantener el token guardado. */
   token: z.string().trim().max(4000).optional(),
-  country: z.enum(Object.keys(DROPI_COUNTRIES) as [DropiCountry, ...DropiCountry[]]),
+  country: countryEnum,
   options: dropiOptionsSchema,
 });
+
+const oauthStart = z.object({ country: countryEnum, options: dropiOptionsSchema });
 
 const customerPatch = z
   .object({
@@ -68,6 +84,8 @@ export async function orderRoutes(
     publicBaseUrl: string;
     /** URL del buscador de agencias Servientrega (vacía = no disponible). */
     agencyUrl?: string;
+    /** Avisos al cliente cuando Dropi cambia la etapa. */
+    onStage?: OnStage;
   },
 ) {
   const { auth, db } = opts;
@@ -90,9 +108,10 @@ export async function orderRoutes(
     const cfg = readDropiConfig(row.configEnc, deps.encryptionKey);
     return {
       connected: row.status === "active",
+      mode: cfg.mode,
       country: cfg.country,
       options: cfg.options,
-      tokenHint: maskSecret(cfg.token),
+      tokenHint: cfg.mode === "token" ? maskSecret(cfg.token) : undefined,
       webhookUrl: await webhookUrl(req.ctx.tenantId),
       updatedAt: row.updatedAt,
     };
@@ -107,12 +126,15 @@ export async function orderRoutes(
       tx.select().from(integrations).where(eq(integrations.kind, "dropi")),
     );
     const prev = row ? readDropiConfig(row.configEnc, deps.encryptionKey) : null;
-    const token = parsed.data.token || prev?.token;
-    if (!token)
+    const newToken = parsed.data.token || "";
+    // Conectado por cuenta Dropi (MCP) y sin token nuevo: solo cambian las opciones.
+    const keepMcp = prev?.mode === "mcp" && !newToken && prev.mcp;
+    const token = newToken || (prev?.mode === "token" ? prev.token : "");
+    if (!keepMcp && !token)
       return reply.code(400).send({ error: "falta_token", message: "Pega el token de Dropi." });
 
     // Se valida contra Dropi si cambia el token o el país.
-    if (!prev || token !== prev.token || parsed.data.country !== prev.country) {
+    if (!keepMcp && (!prev || token !== prev.token || parsed.data.country !== prev.country)) {
       try {
         const provinces = await new DropiClient(
           token,
@@ -128,10 +150,10 @@ export async function orderRoutes(
       }
     }
 
-    const configEnc = encryptSecret(
-      JSON.stringify({ token, country: parsed.data.country, options: parsed.data.options }),
-      deps.encryptionKey,
-    );
+    const cfg: DropiConfig = keepMcp
+      ? { ...prev, country: parsed.data.country, options: parsed.data.options }
+      : { mode: "token", token, country: parsed.data.country, options: parsed.data.options };
+    const configEnc = writeDropiConfig(cfg, deps.encryptionKey);
     await withTenant(db, tenantId, async (tx) => {
       if (row)
         await tx
@@ -148,6 +170,116 @@ export async function orderRoutes(
     return { ok: true, webhookUrl: await webhookUrl(tenantId) };
   });
 
+  // ---------- Conectar con la cuenta de Dropi (MCP + OAuth) ----------
+
+  const redirectUri = `${opts.publicBaseUrl}/api/integrations/dropi/oauth/callback`;
+  const backToPanel = (q: Record<string, string>) =>
+    `${opts.publicBaseUrl}/panel/integraciones/dropi?${new URLSearchParams(q)}`;
+
+  app.post("/api/integrations/dropi/oauth/start", { preHandler: admins }, async (req, reply) => {
+    const b = oauthStart.safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: "datos_invalidos" });
+    try {
+      const clientId = await registerClient(redirectUri, deps.fetchImpl);
+      const { verifier, challenge } = pkce();
+      // El estado va cifrado: lleva el verificador PKCE y a quién pertenece la autorización.
+      const state = encryptSecret(
+        JSON.stringify({
+          t: req.ctx.tenantId,
+          u: req.ctx.userId,
+          v: verifier,
+          c: clientId,
+          country: b.data.country,
+          options: b.data.options,
+          exp: Date.now() + OAUTH_TTL,
+        }),
+        deps.encryptionKey,
+      );
+      return { url: authorizeUrl({ clientId, redirectUri, state, challenge }) };
+    } catch (e) {
+      if (e instanceof DropiError)
+        return reply.code(502).send({ error: "dropi_rechazo", message: e.message });
+      throw e;
+    }
+  });
+
+  // Dropi vuelve aquí tras iniciar sesión. Se exige la misma sesión que inició la conexión,
+  // así nadie puede colgar su cuenta de Dropi en otra tienda (ni al revés).
+  app.get<{ Querystring: Record<string, string | undefined> }>(
+    "/api/integrations/dropi/oauth/callback",
+    { preHandler: admins },
+    async (req, reply) => {
+      const q = req.query;
+      if (q.error)
+        return reply.redirect(
+          backToPanel({ dropi_error: q.error_description || "Dropi no autorizó la conexión." }),
+        );
+      let st: {
+        t: string;
+        u: string;
+        v: string;
+        c: string;
+        country: DropiCountry;
+        options: unknown;
+        exp: number;
+      };
+      try {
+        st = JSON.parse(decryptSecret(q.state ?? "", deps.encryptionKey));
+      } catch {
+        return reply.redirect(backToPanel({ dropi_error: "Enlace de autorización inválido." }));
+      }
+      const { tenantId, userId } = req.ctx;
+      if (st.exp < Date.now() || !q.code)
+        return reply.redirect(
+          backToPanel({ dropi_error: "La autorización venció; inténtalo de nuevo." }),
+        );
+      if (st.t !== tenantId || st.u !== userId)
+        return reply.redirect(
+          backToPanel({ dropi_error: "La autorización era para otra tienda o usuario." }),
+        );
+      try {
+        const mcp = await exchangeCode(
+          { code: q.code, verifier: st.v, redirectUri, clientId: st.c },
+          deps.fetchImpl,
+        );
+        const cfg: DropiConfig = {
+          mode: "mcp",
+          token: "",
+          mcp,
+          country: countryEnum.parse(st.country),
+          options: dropiOptionsSchema.parse(st.options ?? {}),
+        };
+        // Prueba real: la cuenta responde (y deja los tokens renovados si hiciera falta).
+        const provinces = await dropiClient(deps, tenantId, cfg).departments();
+        if (!provinces.length) throw new DropiError("Dropi respondió sin provincias.");
+        const configEnc = writeDropiConfig(cfg, deps.encryptionKey);
+        await withTenant(db, tenantId, async (tx) => {
+          const [row] = await tx
+            .select({ id: integrations.id })
+            .from(integrations)
+            .where(eq(integrations.kind, "dropi"));
+          if (row)
+            await tx
+              .update(integrations)
+              .set({ configEnc, status: "active" })
+              .where(eq(integrations.id, row.id));
+          else await tx.insert(integrations).values({ kind: "dropi", configEnc, status: "active" });
+          await tx
+            .insert(auditLog)
+            .values({ actorUserId: userId, action: "dropi.conectar_cuenta" });
+        });
+        await db
+          .insert(dropiRoutes)
+          .values({ tenantId, secret: randomBytes(24).toString("base64url") })
+          .onConflictDoNothing();
+        return reply.redirect(backToPanel({ dropi: "conectado" }));
+      } catch (e) {
+        if (e instanceof DropiError) return reply.redirect(backToPanel({ dropi_error: e.message }));
+        throw e;
+      }
+    },
+  );
+
   app.delete("/api/integrations/dropi", { preHandler: admins }, async (req) => {
     await withTenant(db, req.ctx.tenantId, async (tx) => {
       await tx.delete(integrations).where(eq(integrations.kind, "dropi"));
@@ -161,18 +293,29 @@ export async function orderRoutes(
 
   // ---------- Buscador de agencias Servientrega ----------
 
-  app.get("/api/integrations/servientrega", { preHandler: admins }, async (req) => ({
-    available: Boolean(opts.agencyUrl),
-    enabled: await agenciesEnabled(db, req.ctx.tenantId),
-  }));
+  app.get("/api/integrations/servientrega", { preHandler: admins }, async (req) => {
+    const mode = await agencyMode(db, req.ctx.tenantId, deps.encryptionKey);
+    return { available: Boolean(opts.agencyUrl), mode, enabled: mode !== "off" };
+  });
 
   app.put("/api/integrations/servientrega", { preHandler: admins }, async (req, reply) => {
-    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
-    if (!b.success) return reply.code(400).send({ error: "datos_invalidos" });
-    if (b.data.enabled && !opts.agencyUrl)
+    const b = z
+      .object({
+        mode: z.enum(AGENCY_MODES as [AgencyMode, ...AgencyMode[]]).optional(),
+        /** Forma anterior: true = «opcion». */
+        enabled: z.boolean().optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success || (!b.data.mode && b.data.enabled === undefined))
+      return reply.code(400).send({ error: "datos_invalidos" });
+    const mode: AgencyMode = b.data.mode ?? (b.data.enabled ? "opcion" : "off");
+    if (mode !== "off" && !opts.agencyUrl)
       return reply.code(409).send({ error: "no_disponible", message: "Falta SERVIENTREGA_URL." });
-    await setAgenciesEnabled(db, req.ctx.tenantId, b.data.enabled, deps.encryptionKey);
-    return { ok: true, enabled: b.data.enabled };
+    await setAgencyMode(db, req.ctx.tenantId, mode, deps.encryptionKey);
+    await withTenant(db, req.ctx.tenantId, (tx) =>
+      tx.insert(auditLog).values({ actorUserId: req.ctx.userId, action: `agencias.${mode}` }),
+    );
+    return { ok: true, mode, enabled: mode !== "off" };
   });
 
   // ---------- Webhook de Dropi (público; la URL lleva un secreto por tienda) ----------
@@ -182,7 +325,7 @@ export async function orderRoutes(
     if (!/^[A-Za-z0-9_-]{20,64}$/.test(secret)) return reply.code(404).send();
     const [route] = await db.select().from(dropiRoutes).where(eq(dropiRoutes.secret, secret));
     if (!route) return reply.code(404).send();
-    const r = await applyDropiWebhook(db, route.tenantId, req.body);
+    const r = await applyDropiWebhook(db, route.tenantId, req.body, opts.onStage);
     if (!r.matched)
       req.log.info({ tenantId: route.tenantId }, "webhook de Dropi sin pedido conocido");
     // 200 siempre: si no es un pedido nuestro, que Dropi reintente no sirve de nada.
@@ -194,11 +337,16 @@ export async function orderRoutes(
   const selectOrder = {
     id: orders.id,
     stage: orders.stage,
+    // Desde cuándo está en la etapa actual según Dropi (p. ej. días en la agencia sin retirar).
+    stageSince: sql<
+      string | null
+    >`(select max(e.created_at) from order_events e where e.order_id = ${orders.id} and e.stage = ${orders.stage} and e.source = 'dropi')`,
     source: orders.source,
     customer: orders.customer,
     items: orders.items,
     total: orders.total,
     currency: orders.currency,
+    shippingCost: orders.shippingCost,
     rateType: orders.rateType,
     dropiOrderId: orders.dropiOrderId,
     dropiStatus: orders.dropiStatus,
@@ -400,6 +548,13 @@ export async function orderRoutes(
       const dropi = await loadDropi(deps, tenantId);
       if (!dropi) return { local, dropi: null, dropiConnected: false };
       try {
+        if (dropi.client.fingerprint)
+          return {
+            local,
+            dropi: null,
+            global: await dropi.client.fingerprint(row.phone),
+            dropiConnected: true,
+          };
         return { local, dropi: await buyerHistory(dropi.client, row.phone), dropiConnected: true };
       } catch (e) {
         return {

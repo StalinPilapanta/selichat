@@ -78,6 +78,21 @@ export const riskRulesSchema = z.object({
 });
 export type RiskRules = z.infer<typeof riskRulesSchema>;
 
+/** Avisos por WhatsApp al cliente cuando cambia el estado del pedido. */
+export const orderNoticesSchema = z.object({
+  /** Al llegar a la agencia/oficina de la transportadora. */
+  retiro: z.boolean().default(false),
+  /** Días en la agencia sin retirar para enviar un recordatorio (0 = no recordar). */
+  recordatorioDias: z.number().int().min(0).max(15).default(2),
+  /** Novedad de la transportadora (no lo encontraron, dirección errada…). */
+  novedad: z.boolean().default(false),
+  /** Plantillas aprobadas para cuando pasaron más de 24 h desde el último mensaje del cliente. */
+  plantillaRetiro: z.string().trim().max(120).default(""),
+  plantillaNovedad: z.string().trim().max(120).default(""),
+  idioma: z.string().trim().max(10).default("es"),
+});
+export type OrderNotices = z.infer<typeof orderNoticesSchema>;
+
 export const dropiOptionsSchema = z.object({
   /** Subir a Dropi apenas el cliente confirma con la IA. */
   autoUpload: z.boolean().default(true),
@@ -85,6 +100,20 @@ export const dropiOptionsSchema = z.object({
   /** Estado con el que se crea la orden en Dropi. */
   initialStatus: z.enum(["PENDIENTE CONFIRMACION", "PENDIENTE"]).default("PENDIENTE CONFIRMACION"),
   risk: riskRulesSchema.default({ enabled: false, minDeliveryRate: 50, minOrders: 2 }),
+  /** No subir si ya hay en Dropi un pedido activo con ese teléfono en estos días (0 = no revisar). */
+  duplicateDays: z.number().int().min(0).max(30).default(3),
+  /** Cotizar el envío antes de subir (cuenta conectada por MCP); sin cobertura no se sube. */
+  quoteBeforeUpload: z.boolean().default(true),
+  /** Revisar stock y costo de proveedor en Dropi antes de subir (MCP). */
+  checkStock: z.boolean().default(true),
+  notices: orderNoticesSchema.default({
+    retiro: false,
+    recordatorioDias: 2,
+    novedad: false,
+    plantillaRetiro: "",
+    plantillaNovedad: "",
+    idioma: "es",
+  }),
 });
 export type DropiOptions = z.infer<typeof dropiOptionsSchema>;
 

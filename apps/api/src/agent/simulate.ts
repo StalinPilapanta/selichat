@@ -11,17 +11,18 @@ import type { CheckoutState } from "@chatea/shared";
 import { generateText, type ModelMessage, Output } from "ai";
 import { z } from "zod";
 import type { ModelResolver } from "../ai/models.js";
-import { agenciesEnabled, findAgencies } from "../carriers/servientrega.js";
+import { agencyMode, findAgencies, resolveAgency } from "../carriers/servientrega.js";
 import { type DropiDeps, loadDropi, resolvePlace } from "../orders/service.js";
 import { loadProduct } from "../services/catalog.js";
 import { type AgentPrompt, loadAgentPrompt, runAgentTurn, tenantInfo } from "./engine.js";
 import { splitReply } from "./format.js";
+import type { AgencyDeps } from "./sales-agent.js";
 
 export interface SimDeps {
   db: Database;
   resolveModel: ModelResolver;
   dropi?: Omit<DropiDeps, "db">;
-  agencies?: { url: string; fetchImpl?: typeof fetch };
+  agencies?: AgencyDeps;
 }
 
 export interface SimMessage {
@@ -57,9 +58,11 @@ async function context(deps: SimDeps, tenantId: string, productId: string) {
   const resolved = await deps.resolveModel(tenantId, "ventas");
   // Mismas herramientas que en WhatsApp: cobertura de Dropi y agencias (solo lectura).
   const dropi = deps.dropi ? await loadDropi({ db: deps.db, ...deps.dropi }, tenantId) : null;
-  const agencies =
-    deps.agencies?.url && (await agenciesEnabled(deps.db, tenantId)) ? deps.agencies : null;
-  return { tenant, resolved, dropi, agencies, ...loaded };
+  const mode = deps.agencies?.url
+    ? await agencyMode(deps.db, tenantId, deps.agencies.encryptionKey)
+    : "off";
+  const agencies = mode !== "off" ? deps.agencies : null;
+  return { tenant, resolved, dropi, agencies, agencyOnly: mode === "solo", ...loaded };
 }
 
 /** Embudo inicial del producto, igual que el primer contacto real. */
@@ -92,6 +95,7 @@ async function agentReply(
   const turn = await runAgentTurn({
     resolved: c.resolved,
     prompt,
+    agencyOnly: c.agencyOnly,
     hasProduct: true,
     checkout,
     context: {
@@ -112,7 +116,14 @@ async function agentReply(
           }
         : {}),
       ...(agencies
-        ? { findAgencies: (texto: string) => findAgencies(agencies.url, texto, agencies.fetchImpl) }
+        ? {
+            findAgencies: (texto: string, hint?: { ciudad?: string }) =>
+              findAgencies(agencies.url, texto, agencies.fetchImpl, {
+                ciudad: hint?.ciudad,
+                geocoder: agencies.geocoder,
+              }),
+            chooseAgency: (value: string) => resolveAgency(agencies.url, value, agencies.fetchImpl),
+          }
         : {}),
     },
   });
