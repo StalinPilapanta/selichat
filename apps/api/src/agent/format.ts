@@ -85,7 +85,7 @@ export function withImages(
   const lastUser = msgs.map((m) => m.role).lastIndexOf("user");
   if (lastUser < 0) return msgs;
   const m = msgs[lastUser];
-  if (!m || m.role !== "user") return msgs;
+  if (m?.role !== "user") return msgs;
   const text = typeof m.content === "string" ? m.content : "";
   const out = [...msgs];
   out[lastUser] = {

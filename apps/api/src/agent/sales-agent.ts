@@ -12,19 +12,8 @@
  * El LLM corre FUERA de transacciones: cada lectura/escritura usa su propio withTenant corto.
  */
 import { type Database, schema, type Tx, withTenant } from "@chatea/db";
-import {
-  buildBuiltinVariables,
-  type CheckoutState,
-  checkoutUpdateSchema,
-  composePrompt,
-  describeCheckout,
-  missingCheckoutFields,
-  PLATFORM_PROMPT,
-  windowOpen,
-} from "@chatea/shared";
-import { generateText, stepCountIs, tool } from "ai";
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
-import { z } from "zod";
+import { type CheckoutState, windowOpen } from "@chatea/shared";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import {
   AiNotConfiguredError,
   type ModelResolver,
@@ -32,8 +21,9 @@ import {
   VISION_KINDS,
 } from "../ai/models.js";
 import type { RealtimeBus } from "../realtime.js";
-import { activePrompt, catalogForPrompt, loadProduct } from "../services/catalog.js";
+import { loadProduct } from "../services/catalog.js";
 import { type SendInput, sendToConversation, type WaConfig } from "../whatsapp/service.js";
+import { loadAgentPrompt, runAgentTurn, tenantInfo } from "./engine.js";
 import { sameReply, splitReply, toModelMessages, withImages } from "./format.js";
 import { prepareTurnMedia } from "./media.js";
 
@@ -69,15 +59,6 @@ const historyQuery = (tx: Tx, conversationId: string) =>
 export const MAX_TURNS_PER_HOUR = 20;
 const HISTORY_LIMIT = 40;
 const HANDOFF_LABEL = "requiere_humano";
-const CONFIRMED_LABEL = "pedido_confirmado";
-
-/** Capa de herramientas: cómo debe usar el modelo las tools (se suma al prompt). */
-const TOOLS_PROMPT = `Herramientas:
-- update_order_data: registra cada dato del pedido apenas el cliente lo dé (nombre, teléfono, ciudad, dirección, cantidad u oferta, variante). Llama a la herramienta y luego responde.
-- confirm_order: cuando estén todos los datos obligatorios y el cliente haya aceptado el resumen del pedido.
-- send_media: envía una imagen, video o audio del producto por su número de recurso cuando ayude a vender (no repitas uno ya enviado).
-- handoff_to_human: si el cliente pide hablar con una persona, está molesto, hace un reclamo, o pregunta algo que no está en tus instrucciones.
-Responde SIEMPRE con texto para el cliente después de usar herramientas. Separa ideas distintas con una línea en blanco: cada párrafo se envía como un mensaje aparte (máximo 3).`;
 
 type Outcome =
   | { status: "omitido"; reason: string }
@@ -150,203 +131,51 @@ export async function runSalesAgent(
   if (media.transcribed > 0)
     history = (await withTenant(db, tenantId, (tx) => historyQuery(tx, conversationId))).reverse();
 
-  // ---------- Prompt ----------
-  const [org] = await db
-    .select({ name: schema.organization.name })
-    .from(schema.organization)
-    .where(eq(schema.organization.id, tenantId));
-  const prompt = await withTenant(db, tenantId, async (tx) => {
-    const common = await activePrompt(tx, "common", null);
-    if (!conv.productId) {
-      const catalog = await tx
-        .select({
-          id: products.id,
-          name: products.name,
-          price: products.price,
-          currency: products.currency,
-        })
-        .from(products)
-        .where(eq(products.status, "activo"))
-        .orderBy(asc(products.name))
-        .limit(50);
-      const keywords = await tx
-        .select({ productId: productTriggers.productId, value: productTriggers.value })
-        .from(productTriggers)
-        .where(eq(productTriggers.kind, "keyword"));
-      const list = catalog
-        .map((p) => {
-          const kw = keywords.filter((k) => k.productId === p.id).map((k) => k.value);
-          return `- id=${p.id} | ${p.name} | ${p.price} ${p.currency}${kw.length ? ` | palabras: ${kw.join(", ")}` : ""}`;
-        })
-        .join("\n");
-      return {
-        text: [
-          PLATFORM_PROMPT,
-          common?.content ?? "",
-          `Tienda: ${org?.name ?? ""}. El cliente aún no eligió producto. Saluda, entiende qué busca y, cuando quede claro cuál producto le interesa, llama a select_product con su id. No inventes productos fuera de esta lista:\n${list || "(catálogo vacío)"}`,
-        ]
-          .filter((t) => t.trim())
-          .join("\n\n---\n\n"),
-        media: [] as { kind: string; url: string; caption: string }[],
-      };
-    }
-    const product = await loadProduct(tx, conv.productId);
-    if (!product) return null;
-    const [master, productPrompt] = await Promise.all([
-      activePrompt(tx, "master", null),
-      activePrompt(tx, "product", product.id),
-    ]);
-    const composed = composePrompt({
-      platform: PLATFORM_PROMPT,
-      common: common?.content,
-      master: master?.content,
-      product: {
-        mode: (productPrompt?.mode ?? "libre") as "libre" | "guiado",
-        content: productPrompt?.content ?? "",
-        sections: productPrompt?.sections ?? {},
-        variables: productPrompt?.variables ?? {},
-      },
-      builtins: buildBuiltinVariables(
-        catalogForPrompt(product, { name: org?.name ?? "", country: settings?.country ?? "" }),
-      ),
-    });
-    return { text: composed.text, media: product.media };
-  });
+  // ---------- Prompt + modelo con herramientas (motor compartido con el simulador) ----------
+  const tenant = await tenantInfo(db, tenantId);
+  const prompt = await withTenant(db, tenantId, (tx) =>
+    loadAgentPrompt(tx, {
+      productId: conv.productId,
+      tenantName: tenant.name,
+      country: settings?.country ?? tenant.country,
+    }),
+  );
   if (!prompt) return { status: "omitido", reason: "producto_no_existe" };
 
-  const checkout = (conv.checkoutState ?? {}) as CheckoutState;
-  const now = new Intl.DateTimeFormat("es", {
-    dateStyle: "full",
-    timeStyle: "short",
-    timeZone: settings?.timezone ?? "America/Guayaquil",
-  }).format(new Date());
-  const mediaList = prompt.media
-    .map((m, i) => `${i + 1}. [${m.kind}] ${m.caption || "(sin descripción)"}`)
-    .join("\n");
-  const system = [
-    prompt.text,
-    TOOLS_PROMPT,
-    `Contexto de esta conversación (datos del sistema, no del cliente):
-- Fecha y hora local: ${now}
-- Nombre de WhatsApp del cliente: ${contact.name ?? contact.profileName ?? "desconocido"}
-- Teléfono del cliente: ${contact.phone}
-${describeCheckout(checkout)}${mediaList ? `\nRecursos disponibles para send_media:\n${mediaList}` : ""}`,
-  ].join("\n\n---\n\n");
-
-  // ---------- Herramientas ----------
-  const outbox: SendInput[] = [];
-  const calls: { name: string; input: unknown }[] = [];
-  let state: CheckoutState = { ...checkout };
-  let handedOff = false;
-
-  const tools = {
-    update_order_data: tool({
-      description: "Registra o corrige datos del pedido que el cliente acaba de dar.",
-      inputSchema: checkoutUpdateSchema.omit({ etapa: true }),
-      execute: async (input) => {
-        calls.push({ name: "update_order_data", input });
-        const clean = Object.fromEntries(
-          Object.entries(input).filter(([, v]) => typeof v === "string" && v.trim()),
-        );
-        state = {
-          ...state,
-          ...clean,
-          etapa: state.etapa === "confirmado" ? "confirmado" : "datos",
-        };
-        await saveCheckout(db, tenantId, conversationId, state);
-        return { ok: true, faltan: missingCheckoutFields(state) };
-      },
-    }),
-    confirm_order: tool({
-      description: "Marca el pedido como confirmado por el cliente.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        calls.push({ name: "confirm_order", input: {} });
-        const faltan = missingCheckoutFields(state);
-        if (faltan.length) return { ok: false, faltan };
-        state = { ...state, etapa: "confirmado" };
-        await saveCheckout(db, tenantId, conversationId, state, CONFIRMED_LABEL);
-        return { ok: true };
-      },
-    }),
-    handoff_to_human: tool({
-      description: "Pasa la conversación a un asesor humano y pausa la IA.",
-      inputSchema: z.object({ reason: z.string().max(300) }),
-      execute: async ({ reason }) => {
-        calls.push({ name: "handoff_to_human", input: { reason } });
-        handedOff = true;
-        await handoff(deps, tenantId, conversationId, reason);
-        return { ok: true };
-      },
-    }),
-    ...(prompt.media.length
-      ? {
-          send_media: tool({
-            description: "Envía un recurso del producto (imagen, video o audio) por su número.",
-            inputSchema: z.object({ resource: z.number().int().min(1) }),
-            execute: async ({ resource }) => {
-              calls.push({ name: "send_media", input: { resource } });
-              const m = prompt.media[resource - 1];
-              if (!m || !["image", "video", "audio", "document"].includes(m.kind))
-                return { ok: false, error: "recurso_no_existe" };
-              outbox.push({
-                kind: "media",
-                mediaType: m.kind as "image" | "video" | "audio" | "document",
-                url: m.url,
-                caption: m.caption || undefined,
-              });
-              return { ok: true };
-            },
-          }),
-        }
-      : {}),
-    ...(!conv.productId
-      ? {
-          select_product: tool({
-            description: "Fija el producto que le interesa al cliente (id del catálogo).",
-            inputSchema: z.object({ productId: z.uuid() }),
-            execute: async ({ productId }) => {
-              calls.push({ name: "select_product", input: { productId } });
-              const ok = await withTenant(db, tenantId, async (tx) => {
-                const [p] = await tx
-                  .select({ id: products.id })
-                  .from(products)
-                  .where(and(eq(products.id, productId), eq(products.status, "activo")));
-                if (!p) return false;
-                await tx
-                  .update(conversations)
-                  .set({ productId })
-                  .where(eq(conversations.id, conversationId));
-                return true;
-              });
-              return ok ? { ok: true } : { ok: false, error: "producto_no_existe" };
-            },
-          }),
-        }
-      : {}),
-  };
-
-  // ---------- LLM ----------
   const started = Date.now();
-  let reply = "";
-  let usage = { input: 0, output: 0, cached: 0, steps: 0 };
+  let turn: Awaited<ReturnType<typeof runAgentTurn>>;
+  const calls: { name: string; input: unknown }[] = [];
   try {
-    const result = await generateText({
-      model: resolved.model,
-      temperature: resolved.temperature,
-      system,
+    turn = await runAgentTurn({
+      resolved,
+      prompt,
+      hasProduct: Boolean(conv.productId),
+      checkout: (conv.checkoutState ?? {}) as CheckoutState,
+      context: {
+        now: new Date(),
+        timezone: settings?.timezone ?? tenant.timezone,
+        customerName: contact.name ?? contact.profileName ?? "desconocido",
+        phone: contact.phone,
+      },
       messages: withImages(toModelMessages(history), media.images),
-      tools,
-      stopWhen: stepCountIs(5),
-      maxOutputTokens: 800,
+      io: {
+        saveCheckout: (state, label) => saveCheckout(db, tenantId, conversationId, state, label),
+        handoff: (reason) => handoff(deps, tenantId, conversationId, reason),
+        selectProduct: (productId) =>
+          withTenant(db, tenantId, async (tx) => {
+            const [p] = await tx
+              .select({ id: products.id })
+              .from(products)
+              .where(and(eq(products.id, productId), eq(products.status, "activo")));
+            if (!p) return false;
+            await tx
+              .update(conversations)
+              .set({ productId })
+              .where(eq(conversations.id, conversationId));
+            return true;
+          }),
+      },
     });
-    reply = result.text.trim();
-    usage = {
-      input: result.totalUsage.inputTokens ?? 0,
-      output: result.totalUsage.outputTokens ?? 0,
-      cached: result.totalUsage.inputTokenDetails?.cacheReadTokens ?? 0,
-      steps: result.steps.length,
-    };
   } catch (e) {
     const error = (e as Error).message.slice(0, 500);
     await recordRun(db, tenantId, conversationId, {
@@ -359,6 +188,9 @@ ${describeCheckout(checkout)}${mediaList ? `\nRecursos disponibles para send_med
     deps.log?.error({ conversationId, err: error }, "falló el agente de ventas");
     return { status: "error", error };
   }
+  let { reply, handedOff } = turn;
+  const { outbox, usage } = turn;
+  calls.push(...turn.calls);
 
   // ---------- Anti-bucle ----------
   const lastAi = [...history].reverse().find((m) => m.direction === "out" && m.author === "ia");
