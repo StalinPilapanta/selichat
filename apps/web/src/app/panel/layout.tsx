@@ -18,6 +18,7 @@ const NAV_SECTIONS: { title?: string; items: { href: string; label: string; soon
         { href: "/panel/inbox", label: "Conversaciones" },
         { href: "/panel/catalogo", label: "Catálogo" },
         { href: "/panel/prompts", label: "Prompts de la tienda" },
+        { href: "/panel/probar-agente", label: "Probar agente" },
       ],
     },
     {

@@ -3,6 +3,7 @@ import { CUSTOM_VARIABLES, GUIDED_SECTIONS } from "@chatea/shared";
 import { APICallError, generateText, Output } from "ai";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { chatTurn, SimError, simulateConversation } from "../agent/simulate.js";
 import { AiNotConfiguredError, type ModelResolver } from "../ai/models.js";
 import type { Auth } from "../auth.js";
 import { requireTenant } from "../plugins/tenant.js";
@@ -110,6 +111,65 @@ export async function aiRoutes(
         error: status === 401 || status === 403 ? "ia_api_key_invalida" : "ia_fallo",
         model: resolved.label,
       });
+    }
+  });
+
+  // ---------- Banco de pruebas del agente (nada se envía por WhatsApp) ----------
+  const simMessage = z.object({
+    role: z.enum(["cliente", "agente"]),
+    text: z.string().max(4000),
+    tools: z.array(z.string()).optional(),
+  });
+  const chatBody = z.object({
+    productId: z.uuid(),
+    history: z.array(simMessage).max(60).default([]),
+    checkout: z.record(z.string(), z.string()).default({}),
+  });
+  const simBody = z.object({
+    productId: z.uuid(),
+    persona: z
+      .string()
+      .trim()
+      .min(5)
+      .max(1000)
+      .default("Mujer de 45 años interesada, pregunta el precio y si es contra entrega, y compra."),
+    maxTurns: z.number().int().min(2).max(10).default(6),
+    checks: z.array(z.string().max(300)).max(10).default([]),
+  });
+
+  const simError = (
+    e: unknown,
+    reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+  ) => {
+    if (e instanceof AiNotConfiguredError)
+      return reply.code(409).send({ error: "ia_no_configurada", agent: e.agent });
+    if (e instanceof SimError) return reply.code(404).send({ error: e.message });
+    const status = APICallError.isInstance(e) ? e.statusCode : undefined;
+    return reply.code(502).send({
+      error: status === 401 || status === 403 ? "ia_api_key_invalida" : "ia_fallo",
+      detail: (e as Error).message.slice(0, 300),
+    });
+  };
+
+  app.post("/api/agent/chat", { preHandler: editors }, async (req, reply) => {
+    const b = chatBody.safeParse(req.body);
+    if (!b.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: b.error.issues });
+    try {
+      return await chatTurn({ db, resolveModel }, req.ctx.tenantId, b.data);
+    } catch (e) {
+      return simError(e, reply);
+    }
+  });
+
+  app.post("/api/agent/simulate", { preHandler: editors }, async (req, reply) => {
+    const b = simBody.safeParse(req.body);
+    if (!b.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: b.error.issues });
+    try {
+      return await simulateConversation({ db, resolveModel }, req.ctx.tenantId, b.data);
+    } catch (e) {
+      return simError(e, reply);
     }
   });
 }

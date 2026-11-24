@@ -371,3 +371,86 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     expect(audio.data.transcript).toBe("quiero dos frascos para mi mamá");
   });
 });
+
+describe.skipIf(!hasDb)("banco de pruebas del agente", () => {
+  let app: FastifyInstance;
+  let h: ReturnType<typeof client>;
+  let customerTurns = 0;
+  const usage = {
+    inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 5, text: 5, reasoning: 0 },
+  };
+  const text = (t: string) => ({
+    content: [{ type: "text" as const, text: t }],
+    finishReason: { unified: "stop" as const, raw: "stop" },
+    usage,
+    warnings: [],
+  });
+  // Un solo modelo hace de cliente, agente y juez según lo que se le pide.
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      if (options.responseFormat?.type === "json")
+        return text(
+          JSON.stringify({
+            checks: [
+              { criterio: "a", cumple: true, detalle: "ok" },
+              { criterio: "b", cumple: false, detalle: "inventó un precio" },
+            ],
+            resumen: "Vende bien pero inventó un precio.",
+          }),
+        );
+      if (prompt.includes("Eres un CLIENTE"))
+        return text(++customerTurns > 2 ? "[FIN]" : `mensaje del cliente ${customerTurns}`);
+      return text("Claro 😊\n\n¿De qué ciudad nos escribes?");
+    },
+  });
+
+  beforeAll(async () => {
+    app = await testApp(
+      {},
+      { resolveModel: async () => ({ model, temperature: 0.3, label: "mock/ventas" }) },
+    );
+    h = client(app);
+  });
+  afterAll(async () => app.close());
+
+  it("chat manual y conversación simulada con veredicto, sin enviar nada", async () => {
+    const o = await h.owner("banco");
+    const prod = await h.call(o.cookie, "POST", "/api/products", {
+      name: "Mega Red",
+      price: "27.99",
+      currency: "USD",
+      initialMessage: "¡Hola! Te cuento de Mega Red",
+    });
+    const productId = prod.json().id;
+
+    const first = await h.call(o.cookie, "POST", "/api/agent/chat", { productId, history: [] });
+    expect(first.json().replies).toEqual([
+      { role: "agente", text: "¡Hola! Te cuento de Mega Red" },
+    ]);
+    const turn = await h.call(o.cookie, "POST", "/api/agent/chat", {
+      productId,
+      history: [...first.json().replies, { role: "cliente", text: "precio?" }],
+    });
+    expect(turn.json().replies.map((r: { text: string }) => r.text)).toEqual([
+      "Claro 😊",
+      "¿De qué ciudad nos escribes?",
+    ]);
+
+    const sim = await h.call(o.cookie, "POST", "/api/agent/simulate", {
+      productId,
+      persona: "Cliente apurado que quiere precio",
+      maxTurns: 5,
+    });
+    expect(sim.statusCode, sim.body).toBe(200);
+    const r = sim.json();
+    expect(r.transcript.filter((m: { role: string }) => m.role === "cliente")).toHaveLength(2);
+    expect(r.verdict.passed).toBe(false);
+    expect(r.verdict.checks[1].detalle).toContain("inventó");
+
+    const other = await h.owner("ajeno");
+    const denied = await h.call(other.cookie, "POST", "/api/agent/chat", { productId });
+    expect(denied.statusCode).toBe(404); // RLS: otra tienda no ve el producto
+  });
+});
