@@ -1,7 +1,14 @@
 import type { FastifyBaseLogger } from "fastify";
 import nodemailer from "nodemailer";
 
-export type Mailer = (msg: { to: string; subject: string; text: string }) => Promise<void>;
+export type Mailer = ((msg: { to: string; subject: string; text: string }) => Promise<void>) & {
+  /** Estado del correo para /health (sin credenciales). */
+  status: () => string;
+};
+
+/** Quita cualquier credencial que pudiera venir en un mensaje de error. */
+const redact = (s: string) =>
+  s.replace(/re_[A-Za-z0-9_]+/g, "re_***").replace(/:\/\/[^@\s]+@/g, "://***@");
 
 /** Envía por SMTP si hay SMTP_URL; si no, imprime el correo en el log (desarrollo). */
 export function createMailer(opts: {
@@ -10,12 +17,31 @@ export function createMailer(opts: {
   log: FastifyBaseLogger;
 }): Mailer {
   if (!opts.smtpUrl) {
-    return async (msg) => {
+    const m = async (msg: { to: string; subject: string; text: string }) => {
       opts.log.info({ email: msg }, "📧 correo (sin SMTP configurado, solo log)");
     };
+    return Object.assign(m, { status: () => "sin_smtp" });
   }
+  let state = "verificando";
   const transport = nodemailer.createTransport(opts.smtpUrl);
-  return async (msg) => {
-    await transport.sendMail({ from: opts.from, ...msg });
+  transport
+    .verify()
+    .then(() => {
+      state = "ok";
+    })
+    .catch((e: Error) => {
+      state = `error: ${redact(e.message).slice(0, 200)}`;
+      opts.log.error({ err: state }, "SMTP no disponible");
+    });
+  const m = async (msg: { to: string; subject: string; text: string }) => {
+    try {
+      await transport.sendMail({ from: opts.from, ...msg });
+      state = "ok";
+    } catch (e) {
+      state = `error_envio: ${redact((e as Error).message).slice(0, 200)}`;
+      opts.log.error({ err: state }, "no se pudo enviar el correo");
+      throw e;
+    }
   };
+  return Object.assign(m, { status: () => state });
 }

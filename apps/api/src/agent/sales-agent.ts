@@ -11,7 +11,7 @@
  *
  * El LLM corre FUERA de transacciones: cada lectura/escritura usa su propio withTenant corto.
  */
-import { type Database, schema, withTenant } from "@chatea/db";
+import { type Database, schema, type Tx, withTenant } from "@chatea/db";
 import {
   buildBuiltinVariables,
   type CheckoutState,
@@ -25,11 +25,17 @@ import {
 import { generateText, stepCountIs, tool } from "ai";
 import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { AiNotConfiguredError, type ModelResolver } from "../ai/models.js";
+import {
+  AiNotConfiguredError,
+  type ModelResolver,
+  type TranscriberResolver,
+  VISION_KINDS,
+} from "../ai/models.js";
 import type { RealtimeBus } from "../realtime.js";
 import { activePrompt, catalogForPrompt, loadProduct } from "../services/catalog.js";
 import { type SendInput, sendToConversation, type WaConfig } from "../whatsapp/service.js";
-import { sameReply, splitReply, toModelMessages } from "./format.js";
+import { sameReply, splitReply, toModelMessages, withImages } from "./format.js";
+import { prepareTurnMedia } from "./media.js";
 
 const { conversations, contacts, messages, products, productTriggers, agentRuns, tenantSettings } =
   schema;
@@ -39,8 +45,25 @@ export interface AgentDeps {
   wa: WaConfig;
   bus: RealtimeBus;
   resolveModel: ModelResolver;
+  /** Transcribe audios del cliente (si el tenant tiene un proveedor que transcriba). */
+  resolveTranscriber?: TranscriberResolver;
   log?: { warn: (o: object, m: string) => void; error: (o: object, m: string) => void };
 }
+
+const historyQuery = (tx: Tx, conversationId: string) =>
+  tx
+    .select({
+      direction: messages.direction,
+      author: messages.author,
+      type: messages.type,
+      body: messages.body,
+      data: messages.data,
+    })
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    // Orden de llegada: el timestamp de Meta viene en segundos y desordena ráfagas.
+    .orderBy(desc(messages.createdAt))
+    .limit(HISTORY_LIMIT);
 
 /** Turnos de IA permitidos por conversación en 1 hora antes de pasar a un humano. */
 export const MAX_TURNS_PER_HOUR = 20;
@@ -75,21 +98,7 @@ export async function runSalesAgent(
       .innerJoin(contacts, eq(contacts.id, conversations.contactId))
       .where(eq(conversations.id, conversationId));
     if (!row) return null;
-    const history = (
-      await tx
-        .select({
-          direction: messages.direction,
-          author: messages.author,
-          type: messages.type,
-          body: messages.body,
-          status: messages.status,
-        })
-        .from(messages)
-        .where(eq(messages.conversationId, conversationId))
-        // Orden de llegada: el timestamp de Meta viene en segundos y desordena ráfagas.
-        .orderBy(desc(messages.createdAt))
-        .limit(HISTORY_LIMIT)
-    ).reverse();
+    const history = (await historyQuery(tx, conversationId)).reverse();
     const [settings] = await tx.select().from(tenantSettings);
     const [turns] = await tx
       .select({ n: sql<number>`count(*)::int` })
@@ -104,13 +113,13 @@ export async function runSalesAgent(
     return { ...row, history, settings, turns: turns?.n ?? 0 };
   });
   if (!ctx) return { status: "omitido", reason: "no_existe" };
-  const { conv, contact, history, settings } = ctx;
+  const { conv, contact, settings } = ctx;
 
   // ---------- Guardas ----------
   if (conv.botPaused) return { status: "omitido", reason: "bot_pausado" };
   if (conv.status !== "abierta") return { status: "omitido", reason: "cerrada" };
   if (!windowOpen(conv.lastInboundAt)) return { status: "omitido", reason: "ventana_cerrada" };
-  const last = history[history.length - 1];
+  const last = ctx.history[ctx.history.length - 1];
   if (last?.direction !== "in") return { status: "omitido", reason: "ya_respondido" }; // p. ej. un asesor contestó antes
   if (ctx.turns >= MAX_TURNS_PER_HOUR) {
     await handoff(deps, tenantId, conversationId, "La IA llegó al límite de turnos por hora.");
@@ -132,6 +141,14 @@ export async function runSalesAgent(
       return { status: "omitido", reason: "ia_no_configurada" };
     throw e;
   }
+
+  // ---------- Audios e imágenes del cliente ----------
+  const media = await prepareTurnMedia(deps, tenantId, conversationId, {
+    vision: resolved.kind ? VISION_KINDS.includes(resolved.kind) : false,
+  });
+  let history = ctx.history;
+  if (media.transcribed > 0)
+    history = (await withTenant(db, tenantId, (tx) => historyQuery(tx, conversationId))).reverse();
 
   // ---------- Prompt ----------
   const [org] = await db
@@ -318,7 +335,7 @@ ${describeCheckout(checkout)}${mediaList ? `\nRecursos disponibles para send_med
       model: resolved.model,
       temperature: resolved.temperature,
       system,
-      messages: toModelMessages(history),
+      messages: withImages(toModelMessages(history), media.images),
       tools,
       stopWhen: stepCountIs(5),
       maxOutputTokens: 800,

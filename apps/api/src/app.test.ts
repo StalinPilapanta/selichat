@@ -26,7 +26,7 @@ describe.skipIf(!hasDb)("API (integración)", () => {
 
   it("health", async () => {
     const res = await app.inject({ url: "/health" });
-    expect(res.json()).toEqual({ ok: true });
+    expect(res.json()).toEqual({ ok: true, mail: "sin_smtp" });
   });
 
   it("rutas de tenant exigen sesión", async () => {

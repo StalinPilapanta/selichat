@@ -4,7 +4,12 @@ import Fastify from "fastify";
 import { runFollowUps } from "./agent/followups.js";
 import { runSalesAgent } from "./agent/sales-agent.js";
 import { AgentScheduler } from "./agent/scheduler.js";
-import { createModelResolver, type ModelResolver } from "./ai/models.js";
+import {
+  createModelResolver,
+  createTranscriberResolver,
+  type ModelResolver,
+  type TranscriberResolver,
+} from "./ai/models.js";
 import { createAuth } from "./auth.js";
 import type { Env } from "./env.js";
 import { createMailer } from "./mailer.js";
@@ -21,6 +26,7 @@ import { whatsappRoutes } from "./routes/whatsapp.js";
 
 export interface AppDeps extends ImportDeps {
   resolveModel?: ModelResolver;
+  resolveTranscriber?: TranscriberResolver;
   /** fetch hacia proveedores de IA (inyectable en pruebas). */
   providerFetch?: typeof fetch;
   /** fetch hacia la Graph API de Meta (inyectable en pruebas). */
@@ -46,10 +52,13 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
 
   await app.register(cors, { origin: [env.WEB_URL], credentials: true });
 
-  app.get("/health", async () => {
+  const health = async () => {
     await client`select 1`;
-    return { ok: true };
-  });
+    return { ok: true, mail: mail.status() };
+  };
+  app.get("/health", health);
+  // Visible desde el dominio público (la web solo reenvía /api/*).
+  app.get("/api/health", health);
 
   await app.register(authRoutes, { auth });
   await app.register(tenantRoutes, {
@@ -68,9 +77,15 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     fetchImpl: deps.metaFetch,
   };
   const resolveModel = deps.resolveModel ?? createModelResolver(db, env.ENCRYPTION_KEY);
+  const resolveTranscriber =
+    deps.resolveTranscriber ?? createTranscriberResolver(db, env.ENCRYPTION_KEY);
   const scheduler = new AgentScheduler(
     (tenantId, conversationId) =>
-      runSalesAgent({ db, wa, bus, resolveModel, log: app.log }, tenantId, conversationId),
+      runSalesAgent(
+        { db, wa, bus, resolveModel, resolveTranscriber, log: app.log },
+        tenantId,
+        conversationId,
+      ),
     env.AGENT_DEBOUNCE_MS,
     (e, conversationId) =>
       app.log.error({ err: e, conversationId }, "error en el turno del agente"),

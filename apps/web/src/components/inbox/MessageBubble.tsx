@@ -45,10 +45,12 @@ function Body({ m }: { m: Message }) {
         <>
           {/* biome-ignore lint/a11y/useMediaCaption: notas de voz */}
           <audio src={src} controls className="max-w-full" />
-          {m.data?.voice ? (
-            <p className="mt-1 text-xs opacity-70">
-              Nota de voz (la IA la transcribirá en la Fase 3)
+          {typeof m.data?.transcript === "string" && m.data.transcript ? (
+            <p className="mt-1 whitespace-pre-wrap text-sm italic opacity-80">
+              «{m.data.transcript}»
             </p>
+          ) : m.data?.transcriptError ? (
+            <p className="mt-1 text-xs opacity-70">No se pudo transcribir</p>
           ) : null}
         </>
       );

@@ -1,5 +1,5 @@
 import { createDb } from "@chatea/db";
-import { MockLanguageModelV4 } from "ai/test";
+import { MockLanguageModelV4, MockTranscriptionModelV4 } from "ai/test";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RealtimeBus } from "../realtime.js";
@@ -28,7 +28,10 @@ describe("formato del agente", () => {
       { direction: "out", author: "humano", type: "text", body: "te ayudo" },
     ]);
     expect(msgs).toEqual([
-      { role: "user", content: "hola\n[audio sin texto]" },
+      {
+        role: "user",
+        content: "hola\n[audio que no se pudo transcribir: pide amablemente que lo escriba]",
+      },
       { role: "assistant", content: "(asesor humano) te ayudo" },
     ]);
   });
@@ -98,6 +101,13 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     const body = init?.body ? JSON.parse(init.body) : {};
     if (url.includes("fields=display_phone_number"))
       return Response.json({ id: "P", display_phone_number: "+1 555", verified_name: "Test" });
+    // Media de Meta: id → URL temporal → bytes.
+    if (url.endsWith("/MEDIA_AUDIO"))
+      return Response.json({ url: "https://lookaside.test/audio", mime_type: "audio/ogg" });
+    if (url.endsWith("/MEDIA_IMG"))
+      return Response.json({ url: "https://lookaside.test/img", mime_type: "image/jpeg" });
+    if (url.startsWith("https://lookaside.test/"))
+      return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
     if (url.endsWith("/messages")) {
       if (body.status === "read") return Response.json({ success: true });
       sent.push(body);
@@ -111,9 +121,11 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     outputTokens: { total: 40, text: 40, reasoning: 0 },
   };
   // Llamadas impares: registra datos con la herramienta; pares: responde al cliente.
+  const prompts: unknown[] = [];
   const model = new MockLanguageModelV4({
-    doGenerate: async () => {
+    doGenerate: async (options) => {
       llmCalls++;
+      prompts.push(options.prompt);
       if (llmCalls % 2 === 1)
         return {
           content: [
@@ -147,7 +159,23 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
       { AGENT_DEBOUNCE_MS: "0" },
       {
         metaFetch,
-        resolveModel: async () => ({ model, temperature: 0.3, label: "mock/ventas" }),
+        resolveModel: async () => ({
+          model,
+          temperature: 0.3,
+          label: "mock/ventas",
+          kind: "openai" as const,
+        }),
+        resolveTranscriber: async () =>
+          new MockTranscriptionModelV4({
+            doGenerate: async () => ({
+              text: "quiero dos frascos para mi mamá",
+              segments: [],
+              language: "es",
+              durationInSeconds: 3,
+              warnings: [],
+              response: { timestamp: new Date(), modelId: "mock-transcribe" },
+            }),
+          }),
         onScheduler: (s) => {
           scheduler = s;
         },
@@ -157,7 +185,7 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
   });
   afterAll(async () => app.close());
 
-  const webhook = async (id: string, text: string) => {
+  const webhook = async (id: string, text: string, extra?: Record<string, unknown>) => {
     const raw = JSON.stringify({
       object: "whatsapp_business_account",
       entry: [
@@ -176,6 +204,7 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
                     timestamp: String(Math.floor(Date.now() / 1000)),
                     type: "text",
                     text: { body: text },
+                    ...extra,
                   },
                 ],
               },
@@ -316,5 +345,29 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     } finally {
       await pg.end();
     }
+  });
+  it("transcribe audios y le pasa las imágenes al modelo", async () => {
+    const o = await h.owner("multimedia");
+    pnid = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const ch = await h.call(o.cookie, "POST", "/api/channels", {
+      name: "Principal",
+      phoneNumberId: pnid,
+      wabaId: "987654321",
+      accessToken: TOKEN,
+      appSecret: APP_SECRET,
+    });
+    channelId = ch.json().id;
+    const before = prompts.length;
+    await webhook("wamid.MM1", "", { type: "audio", audio: { id: "MEDIA_AUDIO", voice: true } });
+    await webhook("wamid.MM2", "", { type: "image", image: { id: "MEDIA_IMG", caption: "así?" } });
+
+    const all = JSON.stringify(prompts.slice(before));
+    expect(all).toContain("quiero dos frascos para mi mamá");
+    expect(all).toContain('"type":"file"'); // la imagen llegó al modelo
+    const [conv] = (await h.call(o.cookie, "GET", "/api/conversations")).json();
+    const msgs = (await h.call(o.cookie, "GET", `/api/conversations/${conv.id}/messages`)).json();
+    const list = Array.isArray(msgs) ? msgs : msgs.messages;
+    const audio = list.find((m: { type: string }) => m.type === "audio");
+    expect(audio.data.transcript).toBe("quiero dos frascos para mi mamá");
   });
 });

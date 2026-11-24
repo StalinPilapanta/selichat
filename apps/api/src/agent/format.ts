@@ -8,6 +8,8 @@ export interface HistoryMessage {
   author: string; // cliente | humano | ia | sistema
   type: string;
   body: string;
+  /** messages.data: aquí vive la transcripción de los audios. */
+  data?: Record<string, unknown> | null;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -25,7 +27,11 @@ function textOf(m: HistoryMessage): string {
   const body = m.body.trim();
   if (["text", "button", "interactive", "template"].includes(m.type)) return body;
   const label = TYPE_LABEL[m.type] ?? m.type;
-  // El agente aún no ve imágenes ni oye audios (Fase 3b): se le indica qué llegó.
+  const transcript = m.data?.transcript;
+  if (m.type === "audio" && typeof transcript === "string" && transcript)
+    return `[audio del cliente, transcrito] ${transcript}`;
+  if (m.type === "audio")
+    return "[audio que no se pudo transcribir: pide amablemente que lo escriba]";
   return body ? `[${label}] ${body}` : `[${label} sin texto]`;
 }
 
@@ -69,3 +75,25 @@ export const sameReply = (a: string, b: string) => {
   const n = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   return n(a) === n(b);
 };
+
+/** Adjunta las imágenes del turno al último mensaje del cliente (modelos con visión). */
+export function withImages(
+  msgs: ModelMessage[],
+  images: { data: Uint8Array; mediaType: string }[],
+): ModelMessage[] {
+  if (!images.length) return msgs;
+  const lastUser = msgs.map((m) => m.role).lastIndexOf("user");
+  if (lastUser < 0) return msgs;
+  const m = msgs[lastUser];
+  if (!m || m.role !== "user") return msgs;
+  const text = typeof m.content === "string" ? m.content : "";
+  const out = [...msgs];
+  out[lastUser] = {
+    role: "user",
+    content: [
+      { type: "text", text: text || "(el cliente envió imágenes)" },
+      ...images.map((i) => ({ type: "image" as const, image: i.data, mediaType: i.mediaType })),
+    ],
+  };
+  return out;
+}
