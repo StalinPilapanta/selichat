@@ -23,6 +23,8 @@ export interface FollowUpStep {
   delayMinutes: number;
   /** Mensaje fijo (puede incluir URLs de media) o instrucción para la IA. */
   message: string;
+  /** mensaje = texto fijo; ia = instrucción para que la IA redacte el recordatorio. */
+  mode?: "mensaje" | "ia";
   /** Plantilla HSM de WhatsApp para cuando la ventana de 24 h está cerrada. */
   template?: { name: string; lang: string } | null;
 }

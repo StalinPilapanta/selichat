@@ -109,6 +109,8 @@ export const conversations = pgTable(
     funnelSentAt: timestamp("funnel_sent_at", { withTimezone: true }),
     /** Por qué la IA pasó la conversación a un humano (se muestra en la bandeja). */
     handoffReason: text("handoff_reason"),
+    /** Recordatorios ya enviados desde el último mensaje del cliente (se reinicia al escribir). */
+    followUpsSent: integer("follow_ups_sent").notNull().default(0),
     ...timestamps,
   },
   (t) => [

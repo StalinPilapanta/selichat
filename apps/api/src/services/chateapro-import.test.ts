@@ -55,9 +55,16 @@ describe("parseWorkspace", () => {
         enabled: true,
         delayMinutes: 60,
         message: "💪Iniciemos el tratamiento hoy mismo!",
+        mode: "mensaje",
         template: null,
       },
-      { enabled: true, delayMinutes: 300, message: "👉 Confirma ahora tu pedido", template: null },
+      {
+        enabled: true,
+        delayMinutes: 300,
+        message: "👉 Confirma ahora tu pedido",
+        mode: "mensaje",
+        template: null,
+      },
     ]);
     // remarketing 1 no tiene mensaje ni plantilla real → se descarta
     expect(d?.followUps?.remarketing).toEqual([
@@ -65,6 +72,7 @@ describe("parseWorkspace", () => {
         enabled: true,
         delayMinutes: 7200,
         message: "",
+        mode: "ia",
         template: { name: "remarketing_megared", lang: "es" },
       },
     ]);

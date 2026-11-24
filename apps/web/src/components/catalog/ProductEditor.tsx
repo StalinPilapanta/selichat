@@ -282,15 +282,21 @@ function StepsEditor({
   onChange: (s: Step[]) => void;
   kind: "reminders" | "remarketing";
 }) {
-  const unit = kind === "reminders" ? 60 : 1440;
-  const unitLabel = kind === "reminders" ? "horas" : "días";
+  const unit = kind === "reminders" ? 1 : 1440;
+  const unitLabel = kind === "reminders" ? "minutos" : "días";
   return (
     <Rows
       items={steps}
       onChange={onChange}
       addLabel={kind === "reminders" ? "Recordatorio" : "Remarketing"}
       empty="Sin pasos."
-      make={() => ({ enabled: true, delayMinutes: unit, message: "", template: null })}
+      make={() => ({
+        enabled: true,
+        delayMinutes: kind === "reminders" ? 30 : unit,
+        message: "",
+        mode: kind === "reminders" ? ("mensaje" as const) : ("ia" as const),
+        template: null,
+      })}
       render={(s, set) => (
         <div className="grid gap-2 sm:grid-cols-[8rem_1fr]">
           <div className="space-y-2">
@@ -316,7 +322,16 @@ function StepsEditor({
             </Field>
           </div>
           <div className="space-y-2">
-            <Field label="Mensaje o instrucción para la IA">
+            <select
+              className="input"
+              value={s.mode ?? "mensaje"}
+              onChange={(e) => set({ mode: e.target.value as "mensaje" | "ia" })}
+              aria-label="Tipo de recordatorio"
+            >
+              <option value="mensaje">Enviar este mensaje tal cual</option>
+              <option value="ia">La IA redacta el mensaje con esta instrucción</option>
+            </select>
+            <Field label={s.mode === "ia" ? "Instrucción para la IA" : "Mensaje"}>
               <textarea
                 className="input"
                 rows={3}
@@ -859,8 +874,10 @@ export function ProductEditor({
               <div>
                 <h3 className="font-medium">Recordatorios</h3>
                 <p className="mb-3 text-sm text-zinc-500">
-                  Si el cliente deja de responder durante la venta (solo dentro del horario de la
-                  tienda).
+                  Si el cliente deja de responder durante la venta. El tiempo cuenta desde su último
+                  mensaje; solo se envía en el horario de la tienda y se reinicia cuando vuelve a
+                  escribir. Ejemplo: 30 min «¿Sigues interesado?» y 1380 min (23 h) antes de que se
+                  cierre la ventana de 24 h de WhatsApp. Pasadas 24 h solo se envía la plantilla.
                 </p>
                 <StepsEditor
                   kind="reminders"

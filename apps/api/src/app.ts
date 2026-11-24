@@ -1,6 +1,7 @@
 import { createDb } from "@chatea/db";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { runFollowUps } from "./agent/followups.js";
 import { runSalesAgent } from "./agent/sales-agent.js";
 import { AgentScheduler } from "./agent/scheduler.js";
 import { createModelResolver, type ModelResolver } from "./ai/models.js";
@@ -75,6 +76,21 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
       app.log.error({ err: e, conversationId }, "error en el turno del agente"),
   );
   deps.onScheduler?.(scheduler);
+  // Recordatorios automáticos (Catálogo → Seguimiento). Una pasada a la vez.
+  let followUpsBusy = false;
+  const followUpsTimer =
+    env.FOLLOWUPS_INTERVAL_MS > 0 && env.NODE_ENV !== "test"
+      ? setInterval(async () => {
+          if (followUpsBusy) return;
+          followUpsBusy = true;
+          try {
+            await runFollowUps({ db, wa, bus, resolveModel, log: app.log });
+          } finally {
+            followUpsBusy = false;
+          }
+        }, env.FOLLOWUPS_INTERVAL_MS)
+      : null;
+  followUpsTimer?.unref();
   await app.register(whatsappRoutes, {
     auth,
     db,
@@ -98,6 +114,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
 
   app.addHook("onClose", async () => {
     scheduler.stop();
+    if (followUpsTimer) clearInterval(followUpsTimer);
     await client.end();
   });
   return app;

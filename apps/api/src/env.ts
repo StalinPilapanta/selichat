@@ -17,6 +17,8 @@ const schema = z.object({
   UPLOAD_DIR: z.string().default("./data/uploads"),
   /** Espera tras el último mensaje del cliente antes de que responda la IA (agrupa ráfagas). */
   AGENT_DEBOUNCE_MS: z.coerce.number().int().min(0).default(6000),
+  /** Cada cuánto se revisan los recordatorios automáticos; 0 = desactivado. */
+  FOLLOWUPS_INTERVAL_MS: z.coerce.number().int().min(0).default(60_000),
   /** Versión de la Graph API de Meta para WhatsApp Cloud. */
   WHATSAPP_GRAPH_VERSION: z
     .string()

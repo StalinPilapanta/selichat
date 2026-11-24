@@ -35,6 +35,8 @@ const followUpStep = z.object({
     .min(1)
     .max(60 * 24 * 30),
   message: z.string().max(4000),
+  /** mensaje = se envía tal cual; ia = el texto es una instrucción y la IA redacta el mensaje. */
+  mode: z.enum(["mensaje", "ia"]).default("mensaje"),
   template: z.object({ name: z.string(), lang: z.string() }).nullable().optional(),
 });
 

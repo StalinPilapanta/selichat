@@ -1,8 +1,11 @@
+import { createDb } from "@chatea/db";
 import { MockLanguageModelV4 } from "ai/test";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { RealtimeBus } from "../realtime.js";
 import { client, hasDb, testApp } from "../test-helpers.js";
 import { sign } from "../whatsapp/signature.js";
+import { dueStep, inSendingHours, runFollowUps } from "./followups.js";
 import { splitReply, toModelMessages } from "./format.js";
 import type { AgentScheduler } from "./scheduler.js";
 import { AgentScheduler as Scheduler } from "./scheduler.js";
@@ -51,6 +54,31 @@ describe("scheduler del agente", () => {
     await new Promise((r) => setTimeout(r, 80));
     await s.whenIdle();
     expect(runs).toEqual(["c1", "c1"]); // pero sí al terminar
+  });
+});
+
+describe("recordatorios: reglas", () => {
+  const steps = [
+    { enabled: true, delayMinutes: 30, message: "a" },
+    { enabled: true, delayMinutes: 1380, message: "b" },
+  ];
+  const t0 = new Date("2026-11-24T15:00:00Z");
+  const at = (min: number) => new Date(t0.getTime() + min * 60_000);
+  it("envía el último paso vencido y no repite", () => {
+    expect(dueStep(steps, 0, t0, at(10))).toBeNull();
+    expect(dueStep(steps, 0, t0, at(31))).toBe(0);
+    expect(dueStep(steps, 1, t0, at(31))).toBeNull();
+    expect(dueStep(steps, 0, t0, at(1400))).toBe(1); // servidor caído: solo el último
+    expect(dueStep(steps, 2, t0, at(5000))).toBeNull();
+  });
+  it("respeta el horario de la tienda (también si cruza medianoche)", () => {
+    const tz = "America/Guayaquil"; // UTC-5
+    const w = { start: "08:00", end: "22:00" };
+    expect(inSendingHours(w, tz, new Date("2026-11-24T15:00:00Z"))).toBe(true); // 10:00
+    expect(inSendingHours(w, tz, new Date("2026-11-24T04:00:00Z"))).toBe(false); // 23:00
+    expect(
+      inSendingHours({ start: "20:00", end: "02:00" }, tz, new Date("2026-11-24T06:00:00Z")),
+    ).toBe(true); // 01:00
   });
 });
 
@@ -222,5 +250,71 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
     expect(llmCalls).toBe(2);
     const [after] = (await h.call(o.cookie, "GET", "/api/conversations")).json();
     expect(after.botPaused).toBe(true);
+  });
+  it("recordatorio a los 30 min si el cliente no responde, y se reinicia cuando escribe", async () => {
+    const o = await h.owner("seguimiento");
+    pnid = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const ch = await h.call(o.cookie, "POST", "/api/channels", {
+      name: "Principal",
+      phoneNumberId: pnid,
+      wabaId: "987654321",
+      accessToken: TOKEN,
+      appSecret: APP_SECRET,
+    });
+    channelId = ch.json().id;
+    // Horario abierto todo el día para que la prueba no dependa de la hora.
+    await h.call(o.cookie, "PUT", "/api/settings", {
+      country: "EC",
+      currency: "USD",
+      timezone: "America/Guayaquil",
+      messagingWindow: { start: "00:00", end: "00:00" },
+    });
+    await h.call(o.cookie, "POST", "/api/products", {
+      name: "Colageno",
+      price: "19.99",
+      currency: "USD",
+      initialMessage: "¡Hola! Te cuento del colágeno",
+      triggers: [{ kind: "keyword", value: "colageno" }],
+      followUps: {
+        reminders: [
+          { enabled: true, delayMinutes: 30, message: "¿Sigues interesada? 😊" },
+          { enabled: true, delayMinutes: 1380, message: "Hoy se cierra tu reserva" },
+        ],
+        remarketing: [],
+      },
+    });
+    await webhook("wamid.FU1", "info del colageno");
+    const before = sent.length;
+
+    const { db, client: pg } = createDb(process.env.DATABASE_URL ?? "");
+    const deps = {
+      db,
+      bus: new RealtimeBus(),
+      wa: {
+        encryptionKey: process.env.ENCRYPTION_KEY ?? "",
+        graphVersion: "v27.0",
+        fetchImpl: metaFetch,
+      },
+      resolveModel: async () => ({ model, temperature: 0.3, label: "mock" }),
+    };
+    const later = (min: number) => new Date(Date.now() + min * 60_000);
+    try {
+      await runFollowUps(deps, later(10), [o.org.id]);
+      expect(sent.length).toBe(before); // aún no
+      await runFollowUps(deps, later(31), [o.org.id]);
+      expect(texts(before)).toEqual(["¿Sigues interesada? 😊"]);
+      await runFollowUps(deps, later(32), [o.org.id]);
+      expect(sent.length).toBe(before + 1); // no repite
+      await runFollowUps(deps, later(1381), [o.org.id]);
+      expect(texts(before)).toEqual(["¿Sigues interesada? 😊", "Hoy se cierra tu reserva"]);
+
+      // El cliente vuelve a escribir: el contador se reinicia (la IA le responde primero).
+      await webhook("wamid.FU2", "sí, cuánto cuesta?");
+      const afterReply = sent.length;
+      await runFollowUps(deps, later(31), [o.org.id]);
+      expect(texts(afterReply)).toEqual(["¿Sigues interesada? 😊"]);
+    } finally {
+      await pg.end();
+    }
   });
 });

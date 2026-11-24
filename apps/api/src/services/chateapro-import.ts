@@ -173,7 +173,14 @@ function parseProduct(slot: string, j: Json, idx?: Json): ImportedProduct | null
         ? { name: tplName, lang: str(tpl.lang) || "es" }
         : null;
     if (!delay || (!message && !template)) return null;
-    return { enabled: yes(src[`activar_${n}`]), delayMinutes: delay, message, template };
+    return {
+      enabled: yes(src[`activar_${n}`]),
+      delayMinutes: delay,
+      message,
+      // En Chatea Pro el remarketing es un prompt para la IA; los recordatorios, texto fijo.
+      mode: messageKey === "prompt" ? "ia" : "mensaje",
+      template,
+    };
   };
 
   const upsells = Object.values(obj(j.upsells))

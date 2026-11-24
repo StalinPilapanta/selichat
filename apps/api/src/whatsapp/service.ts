@@ -139,6 +139,8 @@ export async function ingestWebhook(
         lastInboundAt: m.timestamp,
         lastMessagePreview: previewOf(m.type, m.body),
         unreadCount: sql`${conversations.unreadCount} + 1`,
+        // El cliente respondió: los recordatorios vuelven a empezar.
+        followUpsSent: 0,
         productId,
       })
       .where(eq(conversations.id, conv.id));

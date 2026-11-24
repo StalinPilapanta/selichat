@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "follow_ups_sent" integer DEFAULT 0 NOT NULL;
