@@ -82,7 +82,7 @@ function ManualChat({ productId }: { productId: string }) {
     if (!productId) return;
     api<{ replies: Msg[] }>("/api/agent/chat", {
       method: "POST",
-      body: JSON.stringify({ productId, history: [] }),
+      body: { productId, history: [] },
     })
       .then((r) => setHistory(r.replies))
       .catch((e) => setError(friendly(e)));
@@ -107,7 +107,7 @@ function ManualChat({ productId }: { productId: string }) {
         handedOff?: boolean;
       }>("/api/agent/chat", {
         method: "POST",
-        body: JSON.stringify({ productId, history: next, checkout }),
+        body: { productId, history: next, checkout },
       });
       const paused: Msg[] = r.handedOff
         ? [{ role: "agente", text: "⏸️ La IA pasó la conversación a un humano." }]
@@ -189,7 +189,7 @@ function Simulation({ productId }: { productId: string }) {
     try {
       const r = await api<SimResult>("/api/agent/simulate", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           productId,
           persona,
           maxTurns,
@@ -197,7 +197,7 @@ function Simulation({ productId }: { productId: string }) {
             .split("\n")
             .map((c) => c.trim())
             .filter(Boolean),
-        }),
+        },
       });
       setResult(r);
     } catch (e) {

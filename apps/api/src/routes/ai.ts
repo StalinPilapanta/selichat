@@ -3,7 +3,7 @@ import { CUSTOM_VARIABLES, GUIDED_SECTIONS } from "@chatea/shared";
 import { APICallError, generateText, Output } from "ai";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { chatTurn, SimError, simulateConversation } from "../agent/simulate.js";
+import { chatTurn, type SimDeps, SimError, simulateConversation } from "../agent/simulate.js";
 import { AiNotConfiguredError, type ModelResolver } from "../ai/models.js";
 import type { Auth } from "../auth.js";
 import { requireTenant } from "../plugins/tenant.js";
@@ -57,9 +57,15 @@ const body = z.object({
 
 export async function aiRoutes(
   app: FastifyInstance,
-  opts: { auth: Auth; db: Database; resolveModel: ModelResolver },
+  opts: {
+    auth: Auth;
+    db: Database;
+    resolveModel: ModelResolver;
+    sim?: Omit<SimDeps, "db" | "resolveModel">;
+  },
 ) {
   const { auth, db, resolveModel } = opts;
+  const simDeps: SimDeps = { db, resolveModel, ...opts.sim };
   const editors = requireTenant(auth, db, ["owner", "admin"]);
 
   app.post("/api/ai/generate-product", { preHandler: editors }, async (req, reply) => {
@@ -156,7 +162,7 @@ export async function aiRoutes(
     if (!b.success)
       return reply.code(400).send({ error: "datos_invalidos", issues: b.error.issues });
     try {
-      return await chatTurn({ db, resolveModel }, req.ctx.tenantId, b.data);
+      return await chatTurn(simDeps, req.ctx.tenantId, b.data);
     } catch (e) {
       return simError(e, reply);
     }
@@ -167,7 +173,7 @@ export async function aiRoutes(
     if (!b.success)
       return reply.code(400).send({ error: "datos_invalidos", issues: b.error.issues });
     try {
-      return await simulateConversation({ db, resolveModel }, req.ctx.tenantId, b.data);
+      return await simulateConversation(simDeps, req.ctx.tenantId, b.data);
     } catch (e) {
       return simError(e, reply);
     }

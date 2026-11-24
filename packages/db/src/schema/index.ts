@@ -1,6 +1,7 @@
 export * from "./auth.js";
 export * from "./catalog.js";
 export * from "./messaging.js";
+export * from "./orders.js";
 export * from "./tenant.js";
 
 /**
@@ -28,4 +29,6 @@ export const TENANT_TABLES = [
   "conversation_notes",
   "message_templates",
   "agent_runs",
+  "orders",
+  "order_events",
 ] as const;

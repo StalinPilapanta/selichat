@@ -18,7 +18,7 @@ export async function api<T>(path: string, init?: { method?: string; body?: unkn
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, data.error ?? `http_${res.status}`, data.detail);
+    throw new ApiError(res.status, data.error ?? `http_${res.status}`, data.detail ?? data.message);
   }
   return res.status === 204 ? (undefined as T) : res.json();
 }
@@ -65,12 +65,18 @@ const MESSAGES: Record<string, string> = {
   media_no_disponible: "Meta ya no tiene este archivo disponible.",
   url_privada: "La URL no puede apuntar a una red privada.",
   url_debe_ser_https: "La URL debe empezar con https://",
+  dropi_rechazo: "Dropi rechazó la conexión.",
+  falta_token: "Pega el token de Dropi.",
+  ya_en_dropi: "El pedido ya está en Dropi.",
+  no_se_puede: "No se pudo crear el pedido.",
 };
 
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) {
     const base = MESSAGES[e.code] ?? `Error: ${e.code}`;
-    return e.detail ? `${base} ${e.detail}` : base;
+    if (!e.detail) return base;
+    // Mensajes del API ya escritos para el usuario: no repetir el genérico.
+    return e.detail.startsWith(base) || e.detail.length > 40 ? e.detail : `${base} ${e.detail}`;
   }
   if (e && typeof e === "object" && "message" in e && typeof e.message === "string")
     return e.message;

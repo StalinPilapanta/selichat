@@ -11,6 +11,8 @@ import type { CheckoutState } from "@chatea/shared";
 import { generateText, type ModelMessage, Output } from "ai";
 import { z } from "zod";
 import type { ModelResolver } from "../ai/models.js";
+import { agenciesEnabled, findAgencies } from "../carriers/servientrega.js";
+import { type DropiDeps, loadDropi, resolvePlace } from "../orders/service.js";
 import { loadProduct } from "../services/catalog.js";
 import { type AgentPrompt, loadAgentPrompt, runAgentTurn, tenantInfo } from "./engine.js";
 import { splitReply } from "./format.js";
@@ -18,6 +20,8 @@ import { splitReply } from "./format.js";
 export interface SimDeps {
   db: Database;
   resolveModel: ModelResolver;
+  dropi?: Omit<DropiDeps, "db">;
+  agencies?: { url: string; fetchImpl?: typeof fetch };
 }
 
 export interface SimMessage {
@@ -51,7 +55,11 @@ async function context(deps: SimDeps, tenantId: string, productId: string) {
   });
   if (!loaded) throw new SimError("producto_no_existe");
   const resolved = await deps.resolveModel(tenantId, "ventas");
-  return { tenant, resolved, ...loaded };
+  // Mismas herramientas que en WhatsApp: cobertura de Dropi y agencias (solo lectura).
+  const dropi = deps.dropi ? await loadDropi({ db: deps.db, ...deps.dropi }, tenantId) : null;
+  const agencies =
+    deps.agencies?.url && (await agenciesEnabled(deps.db, tenantId)) ? deps.agencies : null;
+  return { tenant, resolved, dropi, agencies, ...loaded };
 }
 
 /** Embudo inicial del producto, igual que el primer contacto real. */
@@ -80,6 +88,7 @@ async function agentReply(
   history: SimMessage[],
   checkout: CheckoutState,
 ) {
+  const { dropi, agencies } = c;
   const turn = await runAgentTurn({
     resolved: c.resolved,
     prompt,
@@ -92,7 +101,20 @@ async function agentReply(
       phone: "593990000000",
     },
     messages: toModel(history),
-    io: { saveCheckout: async () => {}, handoff: async () => {}, selectProduct: async () => true },
+    io: {
+      saveCheckout: async () => {},
+      handoff: async () => {},
+      selectProduct: async () => true,
+      ...(dropi
+        ? {
+            checkCity: (ciudad: string, provincia?: string) =>
+              resolvePlace(dropi.client, dropi.config.options.rateType, ciudad, provincia),
+          }
+        : {}),
+      ...(agencies
+        ? { findAgencies: (texto: string) => findAgencies(agencies.url, texto, agencies.fetchImpl) }
+        : {}),
+    },
   });
   const tools = turn.calls.map((x) => x.name);
   const texts = splitReply(turn.reply, 3);

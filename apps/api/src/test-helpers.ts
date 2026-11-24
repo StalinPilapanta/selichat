@@ -15,7 +15,7 @@ export async function testApp(extra: Record<string, string> = {}, deps: AppDeps 
   );
 }
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export function client(app: FastifyInstance) {
   const call = (cookie: string, method: Method, url: string, payload?: object) =>

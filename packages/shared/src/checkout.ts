@@ -11,6 +11,7 @@ export const CHECKOUT_FIELDS = {
   ciudad: "Ciudad",
   direccion: "Dirección de entrega",
   referencia: "Referencia de la dirección",
+  agencia: "Retiro en agencia",
   cantidad: "Cantidad / oferta elegida",
   variante: "Variante",
   notas: "Notas del pedido",
@@ -27,6 +28,8 @@ export const checkoutUpdateSchema = z.object({
   ciudad: z.string().max(80).optional(),
   direccion: z.string().max(300).optional(),
   referencia: z.string().max(300).optional(),
+  /** Oficina de la transportadora donde retira el cliente (en vez de entrega a domicilio). */
+  agencia: z.string().max(300).optional(),
   cantidad: z.string().max(120).optional(),
   variante: z.string().max(120).optional(),
   notas: z.string().max(500).optional(),
@@ -38,7 +41,10 @@ export type CheckoutState = z.infer<typeof checkoutUpdateSchema>;
 export const CHECKOUT_REQUIRED: CheckoutField[] = ["nombre", "ciudad", "direccion", "cantidad"];
 
 export function missingCheckoutFields(s: CheckoutState): CheckoutField[] {
-  return CHECKOUT_REQUIRED.filter((k) => !s[k]?.trim());
+  // Si retira en agencia, la agencia reemplaza a la dirección de entrega.
+  return CHECKOUT_REQUIRED.filter(
+    (k) => !s[k]?.trim() && !(k === "direccion" && s.agencia?.trim()),
+  );
 }
 
 /** Resumen legible para el prompt del agente. */

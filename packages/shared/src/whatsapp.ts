@@ -36,8 +36,67 @@ export function normalizeRecipient(waId: string): string {
   return d;
 }
 
-/** +593 99 123 4567 → presentación legible (agrupa de a 3-4). */
-export function formatPhone(waId: string): string {
+/** Prefijos internacionales de 1 y 2 dígitos; el resto (p. ej. 593, 507) son de 3. */
+const ONE_DIGIT = new Set(["1", "7"]);
+const TWO_DIGIT = new Set([
+  "20",
+  "27",
+  "30",
+  "31",
+  "32",
+  "33",
+  "34",
+  "36",
+  "39",
+  "40",
+  "41",
+  "43",
+  "44",
+  "45",
+  "46",
+  "47",
+  "48",
+  "49",
+  "51",
+  "52",
+  "53",
+  "54",
+  "55",
+  "56",
+  "57",
+  "58",
+  "60",
+  "61",
+  "62",
+  "63",
+  "64",
+  "65",
+  "66",
+  "81",
+  "82",
+  "84",
+  "86",
+  "90",
+  "91",
+  "92",
+  "93",
+  "94",
+  "95",
+  "98",
+]);
+
+/** wa_id → código de país y número nacional: 593991234567 → {code:"593", number:"991234567"}. */
+export function splitPhone(waId: string): { code: string; number: string } {
   const d = digitsOnly(waId);
-  return d ? `+${d}` : "";
+  if (!d) return { code: "", number: "" };
+  const len = ONE_DIGIT.has(d.slice(0, 1)) ? 1 : TWO_DIGIT.has(d.slice(0, 2)) ? 2 : 3;
+  if (d.length <= len + 4) return { code: "", number: d };
+  return { code: d.slice(0, len), number: d.slice(len) };
+}
+
+/** +593 991234567: código de país separado del número. */
+export function formatPhone(waId: string): string {
+  const { code, number } = splitPhone(waId);
+  if (!number) return "";
+  return code ? `+${code} ${number}` : `+${number}`;
 }

@@ -24,8 +24,9 @@ export const INTEGRATIONS: IntegrationInfo[] = [
   {
     key: "dropi",
     name: "Dropi",
-    description: "Crear pedidos, cotizar envíos, huella del comprador y estados logísticos.",
-    phase: "Fase 4",
+    description:
+      "Sube los pedidos confirmados, valida la cobertura y recibe los estados logísticos.",
+    href: "/panel/integraciones/dropi",
   },
   {
     key: "meta",

@@ -18,6 +18,7 @@ import { aiRoutes } from "./routes/ai.js";
 import { authRoutes } from "./routes/auth.js";
 import { type ImportDeps, importRoutes } from "./routes/import.js";
 import { inboxRoutes } from "./routes/inbox.js";
+import { orderRoutes } from "./routes/orders.js";
 import { productRoutes } from "./routes/products.js";
 import { promptRoutes } from "./routes/prompts.js";
 import { tenantRoutes } from "./routes/tenant.js";
@@ -31,6 +32,10 @@ export interface AppDeps extends ImportDeps {
   providerFetch?: typeof fetch;
   /** fetch hacia la Graph API de Meta (inyectable en pruebas). */
   metaFetch?: typeof fetch;
+  /** fetch hacia la API de Dropi (inyectable en pruebas). */
+  dropiFetch?: typeof fetch;
+  /** fetch hacia el buscador de agencias Servientrega (inyectable en pruebas). */
+  agencyFetch?: typeof fetch;
   bus?: RealtimeBus;
   /** Para pruebas: acceso al scheduler del agente. */
   onScheduler?: (s: AgentScheduler) => void;
@@ -76,13 +81,17 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     graphVersion: env.WHATSAPP_GRAPH_VERSION,
     fetchImpl: deps.metaFetch,
   };
+  const dropi = { encryptionKey: env.ENCRYPTION_KEY, fetchImpl: deps.dropiFetch };
+  const agencies = env.SERVIENTREGA_URL
+    ? { url: env.SERVIENTREGA_URL, fetchImpl: deps.agencyFetch }
+    : undefined;
   const resolveModel = deps.resolveModel ?? createModelResolver(db, env.ENCRYPTION_KEY);
   const resolveTranscriber =
     deps.resolveTranscriber ?? createTranscriberResolver(db, env.ENCRYPTION_KEY);
   const scheduler = new AgentScheduler(
     (tenantId, conversationId) =>
       runSalesAgent(
-        { db, wa, bus, resolveModel, resolveTranscriber, log: app.log },
+        { db, wa, bus, resolveModel, resolveTranscriber, dropi, agencies, log: app.log },
         tenantId,
         conversationId,
       ),
@@ -116,6 +125,13 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     publicBaseUrl: env.WEB_URL,
     onInbound: (t, c) => scheduler.schedule(t, c),
   });
+  await app.register(orderRoutes, {
+    auth,
+    db,
+    dropi,
+    publicBaseUrl: env.WEB_URL,
+    agencyUrl: env.SERVIENTREGA_URL,
+  });
   await app.register(inboxRoutes, { auth, db, bus, wa, uploadDir: env.UPLOAD_DIR });
   await app.register(uploadRoutes, {
     auth,
@@ -127,6 +143,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     auth,
     db,
     resolveModel,
+    sim: { dropi, agencies },
   });
 
   app.addHook("onClose", async () => {

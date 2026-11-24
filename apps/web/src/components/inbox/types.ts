@@ -1,3 +1,4 @@
+import { formatPhone } from "@chatea/shared";
 export type ConversationRow = {
   id: string;
   status: string;
@@ -62,4 +63,4 @@ export type Template = {
 };
 
 export const displayName = (c: ConversationRow["contact"]) =>
-  c.name || c.profileName || `+${c.phone}`;
+  c.name || c.profileName || formatPhone(c.phone);

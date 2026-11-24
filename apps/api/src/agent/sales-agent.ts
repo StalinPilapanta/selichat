@@ -20,15 +20,22 @@ import {
   type TranscriberResolver,
   VISION_KINDS,
 } from "../ai/models.js";
+import { agenciesEnabled, findAgencies } from "../carriers/servientrega.js";
+import {
+  createOrderFromConversation,
+  type DropiDeps,
+  loadDropi,
+  resolvePlace,
+  uploadOrder,
+} from "../orders/service.js";
 import type { RealtimeBus } from "../realtime.js";
 import { loadProduct } from "../services/catalog.js";
 import { type SendInput, sendToConversation, type WaConfig } from "../whatsapp/service.js";
-import { loadAgentPrompt, runAgentTurn, tenantInfo } from "./engine.js";
+import { CONFIRMED_LABEL, loadAgentPrompt, runAgentTurn, tenantInfo } from "./engine.js";
 import { sameReply, splitReply, toModelMessages, withImages } from "./format.js";
 import { prepareTurnMedia } from "./media.js";
 
-const { conversations, contacts, messages, products, productTriggers, agentRuns, tenantSettings } =
-  schema;
+const { conversations, contacts, messages, products, agentRuns, tenantSettings } = schema;
 
 export interface AgentDeps {
   db: Database;
@@ -37,6 +44,10 @@ export interface AgentDeps {
   resolveModel: ModelResolver;
   /** Transcribe audios del cliente (si el tenant tiene un proveedor que transcriba). */
   resolveTranscriber?: TranscriberResolver;
+  /** Pedidos → Dropi (sin esto, confirmar no crea el pedido). */
+  dropi?: Omit<DropiDeps, "db">;
+  /** Buscador de agencias Servientrega (URL de la plataforma). */
+  agencies?: { url: string; fetchImpl?: typeof fetch };
   log?: { warn: (o: object, m: string) => void; error: (o: object, m: string) => void };
 }
 
@@ -142,6 +153,10 @@ export async function runSalesAgent(
   );
   if (!prompt) return { status: "omitido", reason: "producto_no_existe" };
 
+  const dropi = deps.dropi ? await loadDropi({ db, ...deps.dropi }, tenantId) : null;
+  const agencies =
+    deps.agencies?.url && (await agenciesEnabled(db, tenantId)) ? deps.agencies : null;
+
   const started = Date.now();
   let turn: Awaited<ReturnType<typeof runAgentTurn>>;
   const calls: { name: string; input: unknown }[] = [];
@@ -159,8 +174,23 @@ export async function runSalesAgent(
       },
       messages: withImages(toModelMessages(history), media.images),
       io: {
-        saveCheckout: (state, label) => saveCheckout(db, tenantId, conversationId, state, label),
+        saveCheckout: async (state, label) => {
+          await saveCheckout(db, tenantId, conversationId, state, label);
+          if (label === CONFIRMED_LABEL) await onConfirmed(deps, tenantId, conversationId);
+        },
         handoff: (reason) => handoff(deps, tenantId, conversationId, reason),
+        ...(dropi
+          ? {
+              checkCity: (ciudad: string, provincia?: string) =>
+                resolvePlace(dropi.client, dropi.config.options.rateType, ciudad, provincia),
+            }
+          : {}),
+        ...(agencies
+          ? {
+              findAgencies: (texto: string) =>
+                findAgencies(agencies.url, texto, agencies.fetchImpl),
+            }
+          : {}),
         selectProduct: (productId) =>
           withTenant(db, tenantId, async (tx) => {
             const [p] = await tx
@@ -278,8 +308,25 @@ async function saveCheckout(
   state: CheckoutState,
   label?: string,
 ) {
-  await withTenant(db, tenantId, (tx) =>
-    tx
+  await withTenant(db, tenantId, async (tx) => {
+    // La ficha del cliente toma el nombre y la ciudad que dio en el chat.
+    if (state.nombre?.trim() || state.ciudad?.trim()) {
+      const [c] = await tx
+        .select({ contactId: conversations.contactId })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      if (c)
+        await tx
+          .update(contacts)
+          .set({
+            ...(state.nombre?.trim()
+              ? { name: sql`coalesce(${contacts.name}, ${state.nombre.trim()})` }
+              : {}),
+            ...(state.ciudad?.trim() ? { city: state.ciudad.trim() } : {}),
+          })
+          .where(eq(contacts.id, c.contactId));
+    }
+    await tx
       .update(conversations)
       .set({
         checkoutState: state as Record<string, string>,
@@ -289,8 +336,38 @@ async function saveCheckout(
             }
           : {}),
       })
-      .where(eq(conversations.id, conversationId)),
-  );
+      .where(eq(conversations.id, conversationId));
+  });
+}
+
+/** El cliente confirmó con la IA: se crea el pedido y, si la tienda lo pide, se sube a Dropi. */
+async function onConfirmed(deps: AgentDeps, tenantId: string, conversationId: string) {
+  if (!deps.dropi) return;
+  const dropiDeps: DropiDeps = { db: deps.db, ...deps.dropi };
+  try {
+    const { order, created } = await createOrderFromConversation(
+      deps.db,
+      tenantId,
+      conversationId,
+      {
+        source: "ia",
+      },
+    );
+    deps.bus.publish(tenantId, { type: "conversation", conversationId });
+    if (!created) return;
+    const dropi = await loadDropi(dropiDeps, tenantId);
+    if (!dropi?.config.options.autoUpload) return;
+    // En segundo plano: la respuesta al cliente no espera a Dropi.
+    void uploadOrder(dropiDeps, tenantId, order.id, { actor: "ia" })
+      .then((r) => {
+        if (r.status === "error")
+          deps.log?.warn({ orderId: order.id, err: r.error }, "no se subió a Dropi");
+        deps.bus.publish(tenantId, { type: "conversation", conversationId });
+      })
+      .catch((err) => deps.log?.error({ orderId: order.id, err }, "falló la subida a Dropi"));
+  } catch (err) {
+    deps.log?.error({ conversationId, err: (err as Error).message }, "no se pudo crear el pedido");
+  }
 }
 
 async function handoff(deps: AgentDeps, tenantId: string, conversationId: string, reason: string) {
