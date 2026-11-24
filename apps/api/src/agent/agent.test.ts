@@ -58,6 +58,27 @@ describe("scheduler del agente", () => {
     await s.whenIdle();
     expect(runs).toEqual(["c1", "c1"]); // pero sí al terminar
   });
+
+  it("un turno colgado no bloquea la conversación para siempre", async () => {
+    const errors: string[] = [];
+    let n = 0;
+    const s = new Scheduler(
+      async () => {
+        n++;
+        if (n === 1) await new Promise(() => {}); // el proveedor nunca responde
+      },
+      5,
+      (e) => errors.push((e as Error).message),
+      40,
+    );
+    s.schedule("t", "c1");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(errors[0]).toContain("no terminó a tiempo");
+    s.schedule("t", "c1"); // el siguiente mensaje sí se atiende
+    await new Promise((r) => setTimeout(r, 30));
+    await s.whenIdle();
+    expect(n).toBe(2);
+  });
 });
 
 describe("recordatorios: reglas", () => {
@@ -94,6 +115,7 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
   let scheduler: AgentScheduler | undefined;
   const sent: Record<string, unknown>[] = [];
   let llmCalls = 0;
+  let failNext = false;
   let pnid = "";
   let channelId = "";
 
@@ -125,6 +147,10 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
   const model = new MockLanguageModelV4({
     doGenerate: async (options) => {
       llmCalls++;
+      if (failNext) {
+        failNext = false;
+        throw new Error("Cuota del proveedor agotada");
+      }
       prompts.push(options.prompt);
       if (llmCalls % 2 === 1)
         return {
@@ -268,6 +294,16 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
       ciudad: "Quito",
       etapa: "datos",
     });
+
+    // El proveedor de IA falla: no responde, y la ficha dice por qué.
+    failNext = true;
+    const before = sent.length;
+    await webhook("wamid.AGINX", "¿y cuánto cuesta?");
+    expect(sent.length).toBe(before);
+    const failed = (await h.call(o.cookie, "GET", `/api/conversations/${conv.id}`)).json();
+    expect(failed.lastAgentRun).toMatchObject({ status: "error" });
+    expect(failed.lastAgentRun.error).toContain("Cuota del proveedor agotada");
+    llmCalls = 2;
 
     // 3) Un asesor responde desde la bandeja → la IA queda pausada.
     const human = await h.call(o.cookie, "POST", `/api/conversations/${conv.id}/messages`, {

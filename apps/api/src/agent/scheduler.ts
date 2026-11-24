@@ -10,6 +10,9 @@
  */
 export type AgentRunner = (tenantId: string, conversationId: string) => Promise<unknown>;
 
+/** Si un turno no termina en este tiempo se libera la conversación (no queda bloqueada). */
+const WATCHDOG_MS = 3 * 60_000;
+
 export class AgentScheduler {
   private timers = new Map<string, NodeJS.Timeout>();
   private running = new Set<string>();
@@ -20,6 +23,7 @@ export class AgentScheduler {
     private run: AgentRunner,
     private debounceMs: number,
     private onError: (e: unknown, conversationId: string) => void = () => {},
+    private watchdogMs = WATCHDOG_MS,
   ) {}
 
   schedule(tenantId: string, conversationId: string) {
@@ -40,11 +44,25 @@ export class AgentScheduler {
       return;
     }
     this.running.add(key);
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await this.run(tenantId, conversationId);
+      await Promise.race([
+        this.run(tenantId, conversationId),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error("El turno de la IA no terminó a tiempo; se liberó la conversación."),
+              ),
+            this.watchdogMs,
+          );
+          timer.unref?.();
+        }),
+      ]);
     } catch (e) {
       this.onError(e, conversationId);
     } finally {
+      clearTimeout(timer);
       this.running.delete(key);
       if (this.again.delete(key)) this.schedule(tenantId, conversationId);
       this.notifyIdle();

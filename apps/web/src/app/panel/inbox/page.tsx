@@ -238,6 +238,12 @@ function Inbox() {
   const select = (id: string | null) =>
     router.replace(id ? `/panel/inbox?c=${id}` : "/panel/inbox");
 
+  function onContactDeleted() {
+    setShowDetails(false);
+    select(null);
+    loadList();
+  }
+
   return (
     <div className="flex h-[calc(100dvh-8.5rem)] min-h-0 flex-col md:h-dvh md:flex-row">
       <aside
@@ -381,6 +387,7 @@ function Inbox() {
                   conv={conv}
                   team={team}
                   onChange={() => loadConversation(conv.id, false)}
+                  onDeleted={onContactDeleted}
                 />
               </div>
             ) : (
@@ -424,7 +431,12 @@ function Inbox() {
 
       {conv && (
         <aside className="hidden min-h-0 w-80 overflow-y-auto border-l border-zinc-200 bg-white lg:block dark:border-zinc-800 dark:bg-zinc-900">
-          <Details conv={conv} team={team} onChange={() => loadConversation(conv.id, false)} />
+          <Details
+            conv={conv}
+            team={team}
+            onChange={() => loadConversation(conv.id, false)}
+            onDeleted={onContactDeleted}
+          />
         </aside>
       )}
     </div>

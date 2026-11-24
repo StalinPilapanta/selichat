@@ -3,6 +3,7 @@ import {
   agencyLabel,
   CHECKOUT_FIELDS,
   type CheckoutField,
+  displayPhone,
   formatPhone,
   ORDER_STAGES,
   type OrderStage,
@@ -10,6 +11,7 @@ import {
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
 import type { ConversationDetail, TeamMember } from "./types";
 
 type Note = { id: string; body: string; createdAt: string; userId: string | null };
@@ -18,10 +20,13 @@ export function Details({
   conv,
   team,
   onChange,
+  onDeleted,
 }: {
   conv: ConversationDetail;
   team: TeamMember[];
   onChange: () => void;
+  /** El contacto se eliminó: la bandeja cierra la conversación y recarga la lista. */
+  onDeleted?: () => void;
 }) {
   const [label, setLabel] = useState("");
   const [notes, setNotes] = useState<Note[]>([]);
@@ -117,7 +122,12 @@ export function Details({
             onChange={(e) => patch({ botPaused: !e.target.checked })}
           />
         </label>
-        <OrderData state={conv.checkoutState ?? {}} conversationId={conv.id} />
+        <AgentStatus run={conv.lastAgentRun} />
+        <OrderData
+          state={conv.checkoutState ?? {}}
+          conversationId={conv.id}
+          contactPhone={conv.contact.phone}
+        />
         <button
           type="button"
           className="btn-ghost w-full"
@@ -206,7 +216,81 @@ export function Details({
         ))}
       </section>
       {error && <p className="text-xs text-red-600">{error}</p>}
+      {onDeleted && <DeleteContact conv={conv} team={team} onDeleted={onDeleted} />}
     </div>
+  );
+}
+
+const SKIP_REASONS: Record<string, string> = {
+  ia_no_configurada:
+    "La IA no está configurada: agrega un proveedor y su clave en IA → Proveedores.",
+  ventana_cerrada: "Pasaron más de 24 h desde el último mensaje del cliente.",
+  limite_turnos: "La IA llegó al límite de 20 respuestas por hora en esta conversación.",
+  producto_no_existe: "El producto de la conversación ya no existe o está inactivo.",
+  cerrada: "La conversación está cerrada.",
+};
+
+/** Si el último turno de la IA falló o no respondió, se dice por qué. */
+function AgentStatus({ run }: { run?: ConversationDetail["lastAgentRun"] }) {
+  if (!run || run.status === "ok") return null;
+  const when = new Date(run.at).toLocaleString("es", { dateStyle: "short", timeStyle: "short" });
+  const why =
+    run.status === "error"
+      ? `Error del proveedor de IA: ${run.error ?? "sin detalle"}`
+      : (SKIP_REASONS[run.reason] ?? run.reason);
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+      <div className="font-medium">La IA no respondió ({when})</div>
+      <div className="mt-0.5 break-words">{why}</div>
+    </div>
+  );
+}
+
+/** Eliminar el contacto (solo dueño o administrador): se borran su chat y sus notas. */
+function DeleteContact({
+  conv,
+  team,
+  onDeleted,
+}: {
+  conv: ConversationDetail;
+  team: TeamMember[];
+  onDeleted: () => void;
+}) {
+  const { data: session } = useSession();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const role = team.find((t) => t.id === session?.user.id)?.role;
+  if (role !== "owner" && role !== "admin") return null;
+  async function remove() {
+    const who = conv.contact.name || conv.contact.profileName || formatPhone(conv.contact.phone);
+    if (
+      !confirm(
+        `¿Eliminar a ${who}? Se borran la conversación, los mensajes y las notas. Sus pedidos se conservan. No se puede deshacer.`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/contacts/${conv.contact.id}`, { method: "DELETE" });
+      onDeleted();
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+      <button
+        type="button"
+        className="btn-ghost w-full text-sm text-red-600"
+        disabled={busy}
+        onClick={remove}
+      >
+        {busy ? "Eliminando…" : "Eliminar contacto"}
+      </button>
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+    </section>
   );
 }
 
@@ -348,9 +432,11 @@ type LinkedOrder = {
 function OrderData({
   state,
   conversationId,
+  contactPhone,
 }: {
   state: Record<string, string>;
   conversationId: string;
+  contactPhone: string;
 }) {
   const fields = (Object.keys(CHECKOUT_FIELDS) as CheckoutField[]).filter((k) => state[k]?.trim());
   const [order, setOrder] = useState<LinkedOrder | null>(null);
@@ -394,7 +480,13 @@ function OrderData({
           {fields.map((k) => (
             <div key={k} className="flex gap-2">
               <dt className="w-24 shrink-0 text-zinc-500">{CHECKOUT_FIELDS[k]}</dt>
-              <dd className="break-words">{k === "agencia" ? agencyLabel(state[k]) : state[k]}</dd>
+              <dd className="break-words">
+                {k === "agencia"
+                  ? agencyLabel(state[k])
+                  : k === "telefono"
+                    ? displayPhone(state[k], contactPhone)
+                    : state[k]}
+              </dd>
             </div>
           ))}
         </dl>

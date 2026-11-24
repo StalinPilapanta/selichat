@@ -87,7 +87,43 @@ type Outcome =
   | { status: "ok"; parts: number }
   | { status: "error"; error: string };
 
+/** Motivos por los que la IA no contesta que el asesor tiene que ver en la ficha. */
+const VISIBLE_SKIPS = new Set([
+  "ia_no_configurada",
+  "ventana_cerrada",
+  "limite_turnos",
+  "producto_no_existe",
+  "cerrada",
+]);
+
+/**
+ * Turno del agente. Además de responder, deja rastro de por qué NO respondió (error del
+ * proveedor, límite de turnos, IA sin configurar…) para mostrarlo en la ficha.
+ */
 export async function runSalesAgent(
+  deps: AgentDeps,
+  tenantId: string,
+  conversationId: string,
+): Promise<Outcome> {
+  let out: Outcome;
+  try {
+    out = await salesTurn(deps, tenantId, conversationId);
+  } catch (e) {
+    const error = (e as Error).message?.slice(0, 500) || "error";
+    await recordRun(deps.db, tenantId, conversationId, { status: "error", error }).catch(
+      () => null,
+    );
+    throw e;
+  }
+  if (out.status === "omitido" && VISIBLE_SKIPS.has(out.reason))
+    await recordRun(deps.db, tenantId, conversationId, {
+      status: "omitido",
+      reply: out.reason,
+    }).catch(() => null);
+  return out;
+}
+
+async function salesTurn(
   deps: AgentDeps,
   tenantId: string,
   conversationId: string,

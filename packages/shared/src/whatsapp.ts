@@ -100,3 +100,19 @@ export function formatPhone(waId: string): string {
   if (!number) return "";
   return code ? `+${code} ${number}` : `+${number}`;
 }
+
+/**
+ * Teléfono escrito por el cliente o guardado en un pedido («0991234567», «991234567»,
+ * «593991234567») con el código de país separado: «+593 991234567». El código se toma del
+ * WhatsApp del contacto (`refPhone`) cuando el número viene sin él.
+ */
+export function displayPhone(value: string | null | undefined, refPhone?: string | null): string {
+  const raw = (value ?? "").trim();
+  const d = raw.replace(/\D/g, "");
+  if (!d) return raw;
+  const dial = refPhone ? splitPhone(refPhone.replace(/\D/g, "")).code : "";
+  if (dial && d.startsWith(dial) && d.length > dial.length + 6) return formatPhone(d);
+  if (dial && d.length <= 10) return `+${dial} ${d.replace(/^0+/, "")}`;
+  if (raw.startsWith("+") || d.length >= 11) return formatPhone(d);
+  return raw;
+}

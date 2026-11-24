@@ -34,6 +34,9 @@ Responde SIEMPRE con texto para el cliente después de usar herramientas. Separa
 
 export const CONFIRMED_LABEL = "pedido_confirmado";
 
+/** Tiempo máximo de un turno del modelo (incluye herramientas). */
+export const TURN_TIMEOUT_MS = 90_000;
+
 export interface AgentPrompt {
   text: string;
   media: { kind: string; url: string; caption: string }[];
@@ -407,6 +410,8 @@ ${describeCheckout(t.checkout, rules)}`;
   };
 
   const result = await generateText({
+    // Sin límite, un proveedor colgado deja la conversación bloqueada (no responde nunca).
+    abortSignal: AbortSignal.timeout(TURN_TIMEOUT_MS),
     model: t.resolved.model,
     temperature: t.resolved.temperature,
     instructions: [

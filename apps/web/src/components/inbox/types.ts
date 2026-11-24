@@ -32,6 +32,8 @@ export type ConversationDetail = ConversationRow & {
   channelName: string;
   displayPhone: string;
   productName: string | null;
+  /** Último turno de la IA (para ver por qué no respondió). */
+  lastAgentRun?: { status: string; error: string | null; reason: string; at: string } | null;
 };
 
 export type Message = {

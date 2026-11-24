@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  displayPhone,
   formatPhone,
   missingCheckoutFields,
   nationalPhone,
@@ -64,6 +65,13 @@ describe("pedidos: reglas", () => {
     expect(formatPhone("19195551234")).toBe("+1 9195551234");
     expect(formatPhone("573001112233")).toBe("+57 3001112233");
     expect(formatPhone("50760001111")).toBe("+507 60001111");
+    // Teléfono del pedido (como lo escribió el cliente) con el código del WhatsApp del contacto.
+    expect(displayPhone("0991234567", "593987654321")).toBe("+593 991234567");
+    expect(displayPhone("991234567", "593987654321")).toBe("+593 991234567");
+    expect(displayPhone("593991234567", "593987654321")).toBe("+593 991234567");
+    expect(displayPhone("8515551234", "18515550000")).toBe("+1 8515551234");
+    expect(displayPhone("+57 300 111 2233")).toBe("+57 3001112233");
+    expect(displayPhone("")).toBe("");
   });
 
   it("retiro en agencia reemplaza la dirección", () => {
@@ -1185,5 +1193,23 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     // En la lista de pedidos se ve desde cuándo está en la agencia.
     const [listed] = (await h.call(o.cookie, "GET", "/api/orders?stage=en_oficina")).json();
     expect(listed.stageSince).toBeTruthy();
+
+    // Eliminar el contacto: se va su conversación, el pedido se conserva.
+    const conv = (
+      await h.call(o.cookie, "GET", `/api/conversations/${order.conversationId}`)
+    ).json();
+    const del = await h.call(o.cookie, "DELETE", `/api/contacts/${conv.contact.id}`);
+    expect(del.statusCode, del.body).toBe(200);
+    expect(del.json().conversations).toBe(1);
+    expect((await h.call(o.cookie, "GET", "/api/conversations")).json()).toHaveLength(0);
+    const kept = (await h.call(o.cookie, "GET", `/api/orders/${order.id}`)).json();
+    expect(kept).toMatchObject({ id: order.id, dropiOrderId: "9001", conversationId: null });
+    expect((await h.call(o.cookie, "DELETE", `/api/contacts/${conv.contact.id}`)).statusCode).toBe(
+      404,
+    );
+    // Otra tienda no puede borrar contactos ajenos.
+    expect(
+      (await h.call(other.cookie, "DELETE", `/api/contacts/${conv.contact.id}`)).statusCode,
+    ).toBe(404);
   });
 });

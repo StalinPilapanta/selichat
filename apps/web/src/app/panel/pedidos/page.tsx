@@ -1,5 +1,11 @@
 "use client";
-import { agencyLabel, LOCAL_STAGES, ORDER_STAGES, type OrderStage } from "@chatea/shared";
+import {
+  agencyLabel,
+  displayPhone,
+  LOCAL_STAGES,
+  ORDER_STAGES,
+  type OrderStage,
+} from "@chatea/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -21,6 +27,8 @@ type Order = {
   stage: OrderStage;
   /** Desde cuándo está en la etapa actual (según Dropi). */
   stageSince?: string | null;
+  /** WhatsApp del contacto (da el código de país del teléfono del pedido). */
+  contactPhone?: string | null;
   source: string;
   customer: Customer;
   items: { name: string; quantity: number; unitPrice: string; variant?: string }[];
@@ -112,6 +120,7 @@ function Card({ o, onOpen }: { o: Order; onOpen: () => void }) {
       </div>
       <div className="mt-0.5 truncate text-xs text-zinc-500">
         {o.items.map((i) => `${i.quantity}× ${i.name}`).join(", ")} · {o.customer.ciudad || "—"}
+        {o.customer.telefono && ` · ${displayPhone(o.customer.telefono, o.contactPhone)}`}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <StageBadge stage={o.stage} />
@@ -211,6 +220,11 @@ function OrderPanel({
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-lg font-semibold">{o ? fullName(o.customer) : "Pedido"}</h2>
+            {o?.customer.telefono && (
+              <p className="text-sm text-zinc-500">
+                {displayPhone(o.customer.telefono, o.contactPhone)}
+              </p>
+            )}
             {o && (
               <p className="text-xs text-zinc-500">
                 {when(o.createdAt)} ·{" "}
@@ -282,7 +296,14 @@ function OrderPanel({
               )}
               {FIELDS.map((f) => (
                 <label key={f.key} className="block text-sm">
-                  <span className="label">{f.label}</span>
+                  <span className="label">
+                    {f.label}
+                    {f.key === "telefono" && form.telefono && (
+                      <span className="ml-1 font-normal text-zinc-500">
+                        ({displayPhone(form.telefono, o.contactPhone)})
+                      </span>
+                    )}
+                  </span>
                   <input
                     className="input"
                     disabled={!local}

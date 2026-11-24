@@ -77,6 +77,7 @@ export async function inboxRoutes(
 ) {
   const { auth, db, bus, wa } = opts;
   const anyMember = requireTenant(auth, db);
+  const admins = requireTenant(auth, db, ["owner", "admin"]);
   const mediaRoot = resolve(opts.uploadDir);
 
   const convSelect = {
@@ -149,6 +150,13 @@ export async function inboxRoutes(
             channelName: channels.name,
             displayPhone: channels.displayPhone,
             productName: products.name,
+            // Último turno de la IA: si falló o no respondió, la ficha muestra el motivo.
+            lastAgentRun: sql<{
+              status: string;
+              error: string | null;
+              reason: string;
+              at: string;
+            } | null>`(select json_build_object('status', r.status, 'error', r.error, 'reason', r.reply, 'at', r.created_at) from agent_runs r where r.conversation_id = ${conversations.id} and r.agent = 'ventas' order by r.created_at desc limit 1)`,
           })
           .from(conversations)
           .innerJoin(contacts, eq(contacts.id, conversations.contactId))
@@ -421,6 +429,40 @@ export async function inboxRoutes(
         tx.update(contacts).set(body.data).where(eq(contacts.id, req.params.id)).returning(),
       );
       return row ?? reply.code(404).send();
+    },
+  );
+
+  /**
+   * Elimina un contacto con sus conversaciones, mensajes y notas (solo dueño o administrador).
+   * Los pedidos se conservan (quedan sin contacto ni conversación) para no perder ventas.
+   */
+  app.delete<{ Params: { id: string } }>(
+    "/api/contacts/:id",
+    { preHandler: admins },
+    async (req, reply) => {
+      if (!isUuid(req.params.id)) return reply.code(404).send();
+      const removed = await withTenant(db, req.ctx.tenantId, async (tx) => {
+        const convs = await tx
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(eq(conversations.contactId, req.params.id));
+        const [row] = await tx
+          .delete(contacts)
+          .where(eq(contacts.id, req.params.id))
+          .returning({ id: contacts.id });
+        if (!row) return null;
+        await tx.insert(auditLog).values({
+          actorUserId: req.ctx.userId,
+          action: "contacto.eliminar",
+          data: { contactId: row.id, conversaciones: convs.length },
+        });
+        return convs;
+      });
+      if (!removed) return reply.code(404).send();
+      // Las bandejas abiertas recargan la lista (la conversación ya no existe).
+      for (const c of removed)
+        bus.publish(req.ctx.tenantId, { type: "conversation", conversationId: c.id });
+      return { ok: true, conversations: removed.length };
     },
   );
 
