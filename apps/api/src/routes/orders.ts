@@ -30,6 +30,7 @@ import {
   type DropiConfig,
   type DropiDeps,
   dropiClient,
+  forgetDropiClient,
   loadDropi,
   type OnStage,
   OrderError,
@@ -109,6 +110,7 @@ export async function orderRoutes(
     return {
       connected: row.status === "active",
       mode: cfg.mode,
+      authError: cfg.mode === "mcp" ? (cfg.authError ?? null) : null,
       country: cfg.country,
       options: cfg.options,
       tokenHint: cfg.mode === "token" ? maskSecret(cfg.token) : undefined,
@@ -249,6 +251,7 @@ export async function orderRoutes(
           country: countryEnum.parse(st.country),
           options: dropiOptionsSchema.parse(st.options ?? {}),
         };
+        forgetDropiClient(tenantId); // la sesión anterior (revocada) no se reutiliza
         // Prueba real: la cuenta responde (y deja los tokens renovados si hiciera falta).
         const provinces = await dropiClient(deps, tenantId, cfg).departments();
         if (!provinces.length) throw new DropiError("Dropi respondió sin provincias.");

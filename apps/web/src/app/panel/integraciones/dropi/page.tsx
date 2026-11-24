@@ -8,6 +8,8 @@ type Info = {
   connected: boolean;
   /** token = token de integración; mcp = cuenta Dropi autorizada. */
   mode?: "token" | "mcp";
+  /** Dropi revocó o venció la autorización: hay que volver a autorizar. */
+  authError?: string | null;
   country?: DropiCountry;
   options: DropiOptions;
   tokenHint?: string;
@@ -141,7 +143,11 @@ export default function DropiPage() {
             <h2 className="font-medium">Conexión</h2>
             {info.connected ? (
               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
-                {mcp ? "Conectado con tu cuenta Dropi" : `Conectado · token ${info.tokenHint}`}
+                {mcp
+                  ? info.authError
+                    ? "Requiere volver a autorizar"
+                    : "Conectado con tu cuenta Dropi"
+                  : `Conectado · token ${info.tokenHint}`}
               </span>
             ) : (
               <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
@@ -164,6 +170,13 @@ export default function DropiPage() {
             </select>
           </label>
 
+          {mcp && info.authError && (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+              <b>Dropi revocó el acceso de Selichat.</b> Los pedidos no se pueden subir hasta que
+              pulses «Volver a autorizar» e inicies sesión en Dropi otra vez. Después, en Pedidos,
+              usa «Reintentar» en los que quedaron con error.
+            </div>
+          )}
           <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
             <p className="text-sm">
               <b>Con tu cuenta de Dropi</b> (recomendado): inicias sesión en Dropi y autorizas a
@@ -172,7 +185,7 @@ export default function DropiPage() {
             </p>
             <button
               type="button"
-              className={`${info.connected ? "btn-ghost" : "btn"} mt-2`}
+              className={`${info.connected && !info.authError ? "btn-ghost" : "btn"} mt-2`}
               disabled={redirecting}
               onClick={connectAccount}
             >

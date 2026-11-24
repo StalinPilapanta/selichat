@@ -22,7 +22,7 @@ import {
 } from "./carriers/agencias-geo.js";
 import { findAgencies, resolveAgency } from "./carriers/servientrega.js";
 import type { DropiApi } from "./dropi/client.js";
-import { parseToon } from "./dropi/mcp.js";
+import { DropiMcpClient, parseToon, REAUTH_MESSAGE } from "./dropi/mcp.js";
 import {
   evaluateGlobalRisk,
   evaluateRisk,
@@ -485,6 +485,80 @@ describe("pedidos: reglas", () => {
     expect(await findDuplicate(t2, "593991112233", 3)).toBeNull();
     const m = fake("mcp", [o("5", "991112233", "GUIA_GENERADA", "")]); // MCP ya filtra por fecha
     expect((await findDuplicate(m, "593991112233", 3))?.id).toBe("5");
+  });
+
+  it("Dropi MCP: «token has been revoked» como error de herramienta → renueva o pide reautorizar", async () => {
+    const valid = new Set(["at-ok"]);
+    let refreshOk = true;
+    const f = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/oauth/token")) {
+        if (!refreshOk) return Response.json({ error: "invalid_grant" }, { status: 400 });
+        valid.add("at-new");
+        return Response.json({ access_token: "at-new", refresh_token: "rt-new", expires_in: 3600 });
+      }
+      const bearer = ((init?.headers ?? {}) as Record<string, string>).Authorization?.slice(7);
+      const msg = JSON.parse(String(init?.body));
+      if (!("id" in msg)) return new Response(null, { status: 202 });
+      if (msg.method === "initialize")
+        return Response.json({ jsonrpc: "2.0", id: msg.id, result: {} });
+      // Dropi responde 200 con isError cuando el acceso ya no sirve.
+      if (!valid.has(bearer ?? ""))
+        return Response.json({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "sesión MCP no válida (token has been revoked): el usuario debe desconectar y volver a conectar el conector",
+              },
+            ],
+          },
+        });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: { content: [{ type: "text", text: "items[1]{id,name}:\n  43,PICHINCHA" }] },
+      });
+    }) as unknown as typeof fetch;
+    const tokens = {
+      clientId: "c",
+      accessToken: "at-viejo",
+      refreshToken: "rt",
+      expiresAt: Date.now() + 3600_000,
+    };
+    const saved: string[] = [];
+    const lost: string[] = [];
+    const client = new DropiMcpClient(
+      tokens,
+      "EC",
+      async (t) => {
+        saved.push(t.accessToken);
+      },
+      f,
+      async (m) => {
+        lost.push(m);
+      },
+    );
+    expect((await client.departments()).map((d) => d.name)).toEqual(["PICHINCHA"]);
+    expect(saved).toEqual(["at-new"]); // se renovó y se guardó solo
+    expect(lost).toEqual([]);
+
+    // Si tampoco se puede renovar: mensaje claro y la tienda queda marcada para reautorizar.
+    refreshOk = false;
+    valid.clear();
+    const stale = new DropiMcpClient(
+      { ...tokens, refreshToken: "rt-2" },
+      "EC",
+      async () => {},
+      f,
+      async (m) => {
+        lost.push(m);
+      },
+    );
+    await expect(stale.departments()).rejects.toThrow(REAUTH_MESSAGE);
+    expect(lost).toEqual([REAUTH_MESSAGE]);
   });
 
   it("huella global de Dropi: sin pedidos finalizados nunca bloquea", () => {

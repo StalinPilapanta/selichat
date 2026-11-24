@@ -61,6 +61,8 @@ export interface DropiConfig {
   mcp?: McpTokens;
   country: DropiCountry;
   options: DropiOptions;
+  /** La autorización MCP dejó de servir: hay que «Volver a autorizar». */
+  authError?: string;
 }
 
 export function readDropiConfig(enc: string, key: string): DropiConfig {
@@ -69,6 +71,7 @@ export function readDropiConfig(enc: string, key: string): DropiConfig {
     mode: raw.mode === "mcp" ? "mcp" : "token",
     token: raw.token ?? "",
     mcp: raw.mcp,
+    authError: raw.authError,
     country: (raw.country ?? "EC") as DropiCountry,
     options: dropiOptionsSchema.parse(raw.options ?? {}),
   };
@@ -101,18 +104,33 @@ export function dropiClient(deps: DropiDeps, tenantId: string, config: DropiConf
   return new DropiClient(config.token, config.country, deps.fetchImpl);
 }
 
+/** Olvida el cliente MCP de la tienda (autorización perdida o reconexión). */
+export function forgetDropiClient(tenantId: string) {
+  for (const k of mcpClients.keys()) if (k.startsWith(`${tenantId}|`)) mcpClients.delete(k);
+}
+
 function newMcpClient(deps: DropiDeps, tenantId: string, config: DropiConfig): DropiApi {
   const mcp = config.mcp as McpTokens;
   return new DropiMcpClient(
     mcp,
     config.country,
     async (fresh) => {
-      const configEnc = writeDropiConfig({ ...config, mcp: fresh }, deps.encryptionKey);
+      const configEnc = writeDropiConfig(
+        { ...config, mcp: fresh, authError: undefined },
+        deps.encryptionKey,
+      );
       await withTenant(deps.db, tenantId, (tx) =>
         tx.update(integrations).set({ configEnc }).where(eq(integrations.kind, "dropi")),
       );
     },
     deps.fetchImpl,
+    async (authError) => {
+      forgetDropiClient(tenantId);
+      const configEnc = writeDropiConfig({ ...config, authError }, deps.encryptionKey);
+      await withTenant(deps.db, tenantId, (tx) =>
+        tx.update(integrations).set({ configEnc }).where(eq(integrations.kind, "dropi")),
+      );
+    },
   );
 }
 

@@ -260,6 +260,15 @@ export function parseToon(text: string): Json {
 
 // ---------- Transporte MCP ----------
 
+/**
+ * Dropi a veces avisa del acceso vencido o revocado como respuesta de la herramienta con error
+ * (HTTP 200), no como 401: «sesión MCP no válida (token has been revoked)».
+ */
+const AUTH_ERROR =
+  /token has been revoked|sesi[oó]n mcp no v[aá]lida|invalid[_ ]token|token (is )?expired|unauthori[sz]ed|no bearer token|volver a conectar/i;
+export const REAUTH_MESSAGE =
+  "Dropi revocó o venció la autorización de Selichat. Ve a Integraciones → Dropi, pulsa «Volver a autorizar» y luego reintenta el pedido.";
+
 /** Lee una respuesta JSON-RPC, en JSON directo o en eventos SSE (`data: {...}`). */
 async function readRpc(res: Response, id: number): Promise<Json | null> {
   const ct = res.headers.get("content-type") ?? "";
@@ -368,14 +377,25 @@ class McpSession {
     if (!res.ok) throw new DropiError(`Dropi MCP: HTTP ${res.status} en ${name}.`, res.status);
     const msg = await readRpc(res, id).catch(() => null);
     if (!msg) throw new DropiError(`Dropi no respondió a ${name}.`);
-    if (isObj(msg.error))
-      throw new DropiError(`Dropi: ${str(msg.error.message) || "error"}`.slice(0, 400));
     const result = isObj(msg.result) ? msg.result : {};
     const textOut = (Array.isArray(result.content) ? result.content : [])
       .filter((c): c is Json => isObj(c) && c.type === "text")
       .map((c) => str(c.text))
       .join("\n");
-    if (result.isError) throw new DropiError(`Dropi: ${textOut || "error"}`.slice(0, 400));
+    const failure = isObj(msg.error)
+      ? str(msg.error.message) || "error"
+      : result.isError
+        ? textOut || "error"
+        : "";
+    if (failure && AUTH_ERROR.test(failure)) {
+      if (retried) throw new DropiError(REAUTH_MESSAGE, 401);
+      // Acceso revocado/vencido: se renueva con el refresh token y se reintenta una vez.
+      await this.onUnauthorized();
+      this.sessionId = null;
+      this.ready = null;
+      return this.call(name, args, true);
+    }
+    if (failure) throw new DropiError(`Dropi: ${failure}`.slice(0, 400));
     if (isObj(result.structuredContent)) return { ...result.structuredContent, _text: textOut };
     try {
       const j = JSON.parse(textOut);
@@ -407,6 +427,8 @@ export class DropiMcpClient implements DropiApi {
     /** Guarda los tokens renovados (cifrados en la integración de la tienda). */
     private readonly onTokens: (t: McpTokens) => Promise<void>,
     private readonly fetchImpl: typeof fetch = fetch,
+    /** La autorización ya no sirve: se marca para pedir «Volver a autorizar». */
+    private readonly onAuthLost?: (message: string) => Promise<void>,
   ) {
     this.key = createHash("sha256")
       .update(`mcp|${tokens.clientId}|${tokens.refreshToken || tokens.accessToken}`)
@@ -425,11 +447,16 @@ export class DropiMcpClient implements DropiApi {
   }
 
   private async refresh() {
-    if (!this.tokens.refreshToken)
-      throw new DropiError("La autorización de Dropi venció. Vuelve a conectar Dropi.", 401);
-    const old = this.tokens.accessToken;
-    this.tokens = await refreshTokens(this.tokens, this.fetchImpl);
-    if (this.tokens.accessToken !== old) await this.onTokens(this.tokens);
+    try {
+      if (!this.tokens.refreshToken) throw new DropiError(REAUTH_MESSAGE, 401);
+      const old = this.tokens.accessToken;
+      this.tokens = await refreshTokens(this.tokens, this.fetchImpl);
+      if (this.tokens.accessToken !== old) await this.onTokens(this.tokens);
+    } catch (e) {
+      // Ya no hay forma de renovar: la tienda tiene que volver a autorizar.
+      await this.onAuthLost?.(REAUTH_MESSAGE).catch(() => null);
+      throw e instanceof DropiError && e.status === 401 ? new DropiError(REAUTH_MESSAGE, 401) : e;
+    }
   }
 
   call(name: string, args: Json = {}) {
