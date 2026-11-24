@@ -22,8 +22,36 @@ export function createMailer(opts: {
     };
     return Object.assign(m, { status: () => "sin_smtp" });
   }
+  // Tolera errores comunes al pegar en Coolify: comillas, espacios o "SMTP_URL=" delante.
+  const url = opts.smtpUrl
+    .trim()
+    .replace(/^SMTP_URL\s*=\s*/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+  if (!/^smtps?:\/\//i.test(url)) {
+    // Nunca tumbar el API por un SMTP mal escrito: se avisa en /api/health.
+    const bad = "error: SMTP_URL mal formado (debe empezar con smtps://)";
+    opts.log.error({ err: bad }, "SMTP no disponible");
+    const m = async (msg: { to: string; subject: string; text: string }) => {
+      opts.log.error(
+        { to: msg.to, subject: msg.subject },
+        "correo no enviado: SMTP_URL mal formado",
+      );
+      throw new Error("smtp_mal_configurado");
+    };
+    return Object.assign(m, { status: () => bad });
+  }
   let state = "verificando";
-  const transport = nodemailer.createTransport(opts.smtpUrl);
+  let transport: ReturnType<typeof nodemailer.createTransport>;
+  try {
+    transport = nodemailer.createTransport(url);
+  } catch (e) {
+    const bad = `error: ${redact((e as Error).message).slice(0, 200)}`;
+    const m = async () => {
+      throw new Error("smtp_mal_configurado");
+    };
+    return Object.assign(m, { status: () => bad });
+  }
   transport
     .verify()
     .then(() => {

@@ -100,6 +100,8 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
           followUpsBusy = true;
           try {
             await runFollowUps({ db, wa, bus, resolveModel, log: app.log });
+          } catch (err) {
+            app.log.error({ err }, "falló la pasada de recordatorios");
           } finally {
             followUpsBusy = false;
           }
