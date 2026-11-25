@@ -183,6 +183,21 @@ export const conversationNotes = pgTable(
   (t) => [index("conversation_notes_conv_idx").on(t.conversationId)],
 );
 
+/** Respuestas rápidas del equipo: se insertan en el chat escribiendo «/atajo». */
+export const quickReplies = pgTable(
+  "quick_replies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    /** Atajo sin la barra: «precio», «envio»… */
+    shortcut: text("shortcut").notNull(),
+    body: text("body").notNull(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("quick_replies_tenant_shortcut_uq").on(t.tenantId, t.shortcut)],
+);
+
 /** Plantillas HSM de WhatsApp, sincronizadas con Meta. */
 export const messageTemplates = pgTable(
   "message_templates",

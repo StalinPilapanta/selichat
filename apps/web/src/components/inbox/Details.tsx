@@ -14,8 +14,6 @@ import { api, errorMessage } from "@/lib/api";
 import { useSession } from "@/lib/auth-client";
 import type { ConversationDetail, TeamMember } from "./types";
 
-type Note = { id: string; body: string; createdAt: string; userId: string | null };
-
 export function Details({
   conv,
   team,
@@ -29,15 +27,7 @@ export function Details({
   onDeleted?: () => void;
 }) {
   const [label, setLabel] = useState("");
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [note, setNote] = useState("");
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    api<Note[]>(`/api/conversations/${conv.id}/notes`)
-      .then(setNotes)
-      .catch(() => setNotes([]));
-  }, [conv.id]);
 
   async function patch(body: object) {
     setError("");
@@ -175,47 +165,10 @@ export function Details({
         </form>
       </section>
 
-      <section className="space-y-2">
-        <div className="text-xs font-semibold text-zinc-400 uppercase">Notas internas</div>
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!note.trim()) return;
-            try {
-              await api(`/api/conversations/${conv.id}/notes`, {
-                method: "POST",
-                body: { body: note },
-              });
-              setNote("");
-              setNotes(await api<Note[]>(`/api/conversations/${conv.id}/notes`));
-            } catch (err) {
-              setError(errorMessage(err));
-            }
-          }}
-          className="space-y-2"
-        >
-          <textarea
-            className="input"
-            rows={2}
-            placeholder="Solo la ve tu equipo"
-            aria-label="Nueva nota"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-          <button type="submit" className="btn-ghost w-full" disabled={!note.trim()}>
-            Guardar nota
-          </button>
-        </form>
-        {notes.map((n) => (
-          <div key={n.id} className="rounded-lg bg-amber-50 p-2 dark:bg-amber-950">
-            <div className="whitespace-pre-wrap">{n.body}</div>
-            <div className="mt-1 text-[11px] text-zinc-500">
-              {team.find((t) => t.id === n.userId)?.name ?? "—"} ·{" "}
-              {new Date(n.createdAt).toLocaleString()}
-            </div>
-          </div>
-        ))}
-      </section>
+      <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+        Las notas internas se escriben desde el chat (pestaña «Nota interna» o Alt+N) y aparecen en
+        el hilo; el cliente no las ve.
+      </p>
       {error && <p className="text-xs text-red-600">{error}</p>}
       {onDeleted && <DeleteContact conv={conv} team={team} onDeleted={onDeleted} />}
     </div>

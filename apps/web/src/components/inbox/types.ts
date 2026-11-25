@@ -16,6 +16,8 @@ export type ConversationRow = {
   checkoutState: Record<string, string>;
   /** Motivo por el que la IA pasó la conversación a un humano. */
   handoffReason: string | null;
+  /** Etapa del lead (embudo). */
+  leadStage?: string;
   contact: {
     id: string;
     phone: string;
@@ -64,5 +66,33 @@ export type Template = {
   components: { type: string; text?: string }[];
 };
 
+export type Note = { id: string; body: string; createdAt: string; userId: string | null };
+export type QuickReply = { id: string; shortcut: string; body: string };
+
 export const displayName = (c: ConversationRow["contact"]) =>
   c.name || c.profileName || formatPhone(c.phone);
+
+/** Iniciales del cliente para el avatar («Ana Pérez» → «AP»; un teléfono → sus 2 últimos). */
+export function initialsOf(c: ConversationRow["contact"]) {
+  const n = (c.name || c.profileName || "").trim();
+  if (!n) return c.phone.slice(-2);
+  const w = n.split(/\s+/).filter(Boolean);
+  return ((w[0]?.[0] ?? "") + (w.length > 1 ? (w[w.length - 1]?.[0] ?? "") : "")).toUpperCase();
+}
+
+/** Color fijo por cliente (mismo teléfono → mismo color), legible en claro y oscuro. */
+const AVATAR = [
+  "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100",
+  "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-100",
+  "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100",
+  "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-100",
+  "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-100",
+  "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-100",
+  "bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-100",
+  "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-100",
+];
+export function avatarClass(key: string) {
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR[h % AVATAR.length];
+}

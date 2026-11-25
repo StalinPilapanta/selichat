@@ -129,6 +129,17 @@ body {
   }
 }
 
+/* Fondo del chat: puntos suaves (claro y oscuro). */
+.chat-bg {
+  background-color: rgb(244 244 245);
+  background-image: radial-gradient(rgb(161 161 170 / 0.25) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+[data-theme="dark"] .chat-bg {
+  background-color: rgb(9 9 11);
+  background-image: radial-gradient(rgb(113 113 122 / 0.18) 1px, transparent 1px);
+}
+
 /* ---------- Detalles ---------- */
 * {
   scrollbar-width: thin;

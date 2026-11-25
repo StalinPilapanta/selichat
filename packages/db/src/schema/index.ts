@@ -31,4 +31,5 @@ export const TENANT_TABLES = [
   "agent_runs",
   "orders",
   "order_events",
+  "quick_replies",
 ] as const;

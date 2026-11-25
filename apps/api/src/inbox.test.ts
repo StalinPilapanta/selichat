@@ -379,7 +379,38 @@ describe.skipIf(!hasDb)("WhatsApp + bandeja", () => {
       (await h.call(owner.cookie, "GET", "/api/conversations?filter=pausadas")).json(),
     ).toHaveLength(1);
 
+    // La lista trae la etapa del lead (para el chip de la bandeja).
+    expect(conv.leadStage).toBeTruthy();
+
+    // Respuestas rápidas: se crean, el mismo atajo se actualiza, se validan y se borran.
+    const qr = await h.call(owner.cookie, "POST", "/api/quick-replies", {
+      shortcut: "Precio",
+      body: "El precio es $27.99 con envío gratis.",
+    });
+    expect(qr.statusCode, qr.body).toBe(201);
+    expect(qr.json()).toMatchObject({ shortcut: "precio" });
+    await h.call(owner.cookie, "POST", "/api/quick-replies", {
+      shortcut: "precio",
+      body: "Ahora $24.99",
+    });
+    const quick = (await h.call(owner.cookie, "GET", "/api/quick-replies")).json();
+    expect(quick).toEqual([{ id: qr.json().id, shortcut: "precio", body: "Ahora $24.99" }]);
+    const bad = await h.call(owner.cookie, "POST", "/api/quick-replies", {
+      shortcut: "con espacios",
+      body: "x",
+    });
+    expect(bad.statusCode).toBe(400);
+
     const other = await h.owner("otra");
+    // Otra tienda no ve ni borra las respuestas rápidas de esta.
+    expect((await h.call(other.cookie, "GET", "/api/quick-replies")).json()).toEqual([]);
+    expect(
+      (await h.call(other.cookie, "DELETE", `/api/quick-replies/${qr.json().id}`)).statusCode,
+    ).toBe(404);
+    expect(
+      (await h.call(owner.cookie, "DELETE", `/api/quick-replies/${qr.json().id}`)).statusCode,
+    ).toBe(200);
+    expect((await h.call(owner.cookie, "GET", "/api/quick-replies")).json()).toEqual([]);
     expect((await h.call(other.cookie, "GET", "/api/conversations")).json()).toEqual([]);
     expect(
       (await h.call(other.cookie, "GET", `/api/conversations/${conv.id}/messages`)).json(),

@@ -127,6 +127,20 @@
       "when": 1795627914127,
       "tag": "0017_square_penance",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795629134245,
+      "tag": "0018_common_gorgon",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795629136816,
+      "tag": "0019_quick_replies_rls",
+      "breakpoints": true
     }
   ]
 }

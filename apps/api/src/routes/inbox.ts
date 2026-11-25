@@ -26,6 +26,7 @@ const {
   user,
   products,
   auditLog,
+  quickReplies,
 } = schema;
 const isUuid = (v: string) => z.uuid().safeParse(v).success;
 
@@ -94,6 +95,7 @@ export async function inboxRoutes(
     channelId: conversations.channelId,
     checkoutState: conversations.checkoutState,
     handoffReason: conversations.handoffReason,
+    leadStage: conversations.leadStage,
     contact: {
       id: contacts.id,
       phone: contacts.phone,
@@ -103,6 +105,64 @@ export async function inboxRoutes(
       sourceAdId: contacts.sourceAdId,
     },
   };
+
+  // --- Respuestas rápidas («/atajo» en el chat), compartidas por el equipo ---
+  const quickBody = z.object({
+    shortcut: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9_-]{1,30}$/, "El atajo solo lleva letras, números, - o _ (sin espacios)."),
+    body: z.string().trim().min(1).max(2000),
+  });
+  app.get("/api/quick-replies", { preHandler: anyMember }, async (req) =>
+    withTenant(db, req.ctx.tenantId, (tx) =>
+      tx
+        .select({
+          id: quickReplies.id,
+          shortcut: quickReplies.shortcut,
+          body: quickReplies.body,
+        })
+        .from(quickReplies)
+        .orderBy(quickReplies.shortcut),
+    ),
+  );
+  app.post("/api/quick-replies", { preHandler: anyMember }, async (req, reply) => {
+    const b = quickBody.safeParse(req.body);
+    if (!b.success)
+      return reply
+        .code(400)
+        .send({ error: "datos_invalidos", message: b.error.issues[0]?.message });
+    const [row] = await withTenant(db, req.ctx.tenantId, (tx) =>
+      tx
+        .insert(quickReplies)
+        .values({ ...b.data, createdBy: req.ctx.userId })
+        .onConflictDoUpdate({
+          target: [quickReplies.tenantId, quickReplies.shortcut],
+          set: { body: b.data.body },
+        })
+        .returning({
+          id: quickReplies.id,
+          shortcut: quickReplies.shortcut,
+          body: quickReplies.body,
+        }),
+    );
+    return reply.code(201).send(row);
+  });
+  app.delete<{ Params: { id: string } }>(
+    "/api/quick-replies/:id",
+    { preHandler: anyMember },
+    async (req, reply) => {
+      if (!isUuid(req.params.id)) return reply.code(404).send();
+      const [row] = await withTenant(db, req.ctx.tenantId, (tx) =>
+        tx
+          .delete(quickReplies)
+          .where(eq(quickReplies.id, req.params.id))
+          .returning({ id: quickReplies.id }),
+      );
+      return row ? { ok: true } : reply.code(404).send();
+    },
+  );
 
   /** Conversaciones abiertas con mensajes sin leer (contador del menú). */
   app.get("/api/conversations/unread-count", { preHandler: anyMember }, async (req) => {
