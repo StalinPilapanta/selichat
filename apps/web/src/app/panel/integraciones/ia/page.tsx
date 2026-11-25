@@ -8,6 +8,7 @@ import {
   MODEL_TIER_LABELS,
   recommendedModel,
 } from "@chatea/shared";
+import { Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -114,7 +115,7 @@ function ProviderCard({
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{AI_PROVIDER_LABELS[kind]}</span>
         {connected.length ? (
-          <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+          <span className="rounded bg-brand-100 px-2 py-0.5 text-xs text-brand-800 dark:bg-brand-900 dark:text-brand-200">
             Conectado
           </span>
         ) : (
@@ -189,7 +190,7 @@ function ProviderCard({
             href={PROVIDER_HELP[kind].keyUrl}
             target="_blank"
             rel="noreferrer"
-            className="block text-xs text-emerald-700 hover:underline dark:text-emerald-400"
+            className="block text-xs text-brand-700 hover:underline dark:text-brand-400"
           >
             ¿Dónde obtengo la API key?
           </a>
@@ -419,7 +420,7 @@ function AgentCard({
         {rec && model !== rec.id && (!available || available.has(rec.id)) && (
           <button
             type="button"
-            className="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+            className="text-sm text-brand-700 hover:underline dark:text-brand-400"
             onClick={() => {
               setModel(rec.id);
               setCustom(false);
@@ -471,6 +472,7 @@ export default function Page() {
         </Link>
       </div>
       <PageHeader
+        icon={Sparkles}
         title="Modelos de IA"
         description="Conecta tus cuentas y elige el modelo de cada agente. Puedes mezclar proveedores: por ejemplo Claude para vender y un modelo barato para los avisos. Las API keys se guardan cifradas y nunca se vuelven a mostrar."
       />

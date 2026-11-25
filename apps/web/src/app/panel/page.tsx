@@ -29,7 +29,11 @@ const STEPS = [
     desc: "Tu número de WhatsApp Business y sus plantillas; los mensajes llegan a Conversaciones.",
     href: "/panel/integraciones/whatsapp",
   },
-  { title: "Conecta Dropi", desc: "Próximamente (Fase 4)." },
+  {
+    title: "Conecta Dropi",
+    desc: "Con tu cuenta de Dropi: los pedidos confirmados se suben solos y su estado vuelve aquí.",
+    href: "/panel/integraciones/dropi",
+  },
 ];
 
 export default function Page() {
@@ -43,7 +47,7 @@ export default function Page() {
       />
       <div className="grid gap-3 sm:grid-cols-2">
         {STEPS.map((s) => {
-          const cls = `card h-full ${s.href ? "hover:border-emerald-500" : "opacity-60"}`;
+          const cls = `card h-full ${s.href ? "hover:border-brand-500" : "opacity-60"}`;
           const content = (
             <>
               <div className="font-medium">{s.title}</div>

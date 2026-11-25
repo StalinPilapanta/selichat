@@ -1,5 +1,6 @@
 "use client";
 import { CURRENCIES } from "@chatea/shared";
+import { Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
@@ -55,6 +56,7 @@ export default function Page() {
   return (
     <>
       <PageHeader
+        icon={SettingsIcon}
         title="Configuración"
         description="País, moneda y horario en que los agentes pueden escribir a tus clientes."
       />
@@ -139,9 +141,7 @@ export default function Page() {
           <button type="submit" className="btn">
             Guardar
           </button>
-          {saved && (
-            <span className="text-sm text-emerald-700 dark:text-emerald-400">Guardado ✓</span>
-          )}
+          {saved && <span className="text-sm text-brand-700 dark:text-brand-400">Guardado ✓</span>}
         </div>
         <div className="sm:col-span-2">
           <ErrorText>{error}</ErrorText>

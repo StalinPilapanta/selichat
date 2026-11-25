@@ -64,7 +64,7 @@ export function Details({
             <div>
               Producto:{" "}
               <Link
-                className="text-emerald-700 hover:underline dark:text-emerald-400"
+                className="text-brand-700 hover:underline dark:text-brand-400"
                 href={`/panel/catalogo/${conv.productId}`}
               >
                 {conv.productName}
@@ -361,7 +361,7 @@ function Fingerprint({ conversationId }: { conversationId: string }) {
     rate == null
       ? "border-zinc-200 dark:border-zinc-800"
       : rate >= 70
-        ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950"
+        ? "border-brand-300 bg-brand-50 dark:border-brand-800 dark:bg-brand-950"
         : rate >= 40
           ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
           : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950";
@@ -476,7 +476,7 @@ function OrderData({
       <div className="flex items-center justify-between">
         <span className="font-medium">Pedido</span>
         <span
-          className={`text-xs ${state.etapa === "confirmado" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-500"}`}
+          className={`text-xs ${state.etapa === "confirmado" ? "text-brand-700 dark:text-brand-400" : "text-zinc-500"}`}
         >
           {STAGE_LABEL[state.etapa ?? "descubrimiento"] ?? state.etapa}
         </span>
@@ -525,7 +525,7 @@ function OrderData({
         {order && order.stage !== "cancelado" ? (
           <Link
             href="/panel/pedidos"
-            className="text-emerald-700 hover:underline dark:text-emerald-400"
+            className="text-brand-700 hover:underline dark:text-brand-400"
           >
             {ORDER_STAGES[order.stage] ?? order.stage}
             {order.dropiOrderId ? ` · Dropi #${order.dropiOrderId}` : ""} →
@@ -533,7 +533,7 @@ function OrderData({
         ) : (
           <button
             type="button"
-            className="text-emerald-700 hover:underline disabled:opacity-50 dark:text-emerald-400"
+            className="text-brand-700 hover:underline disabled:opacity-50 dark:text-brand-400"
             disabled={busy || !fields.length}
             onClick={create}
           >

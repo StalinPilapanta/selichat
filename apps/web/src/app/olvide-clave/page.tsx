@@ -59,7 +59,7 @@ export default function Page() {
         </button>
       </form>
       <p className="mt-6 text-center text-sm">
-        <Link href="/entrar" className="text-emerald-700 hover:underline dark:text-emerald-400">
+        <Link href="/entrar" className="text-brand-700 hover:underline dark:text-brand-400">
           Volver a entrar
         </Link>
       </p>

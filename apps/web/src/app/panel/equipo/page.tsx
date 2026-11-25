@@ -1,5 +1,6 @@
 "use client";
 import { ROLE_LABELS, ROLES, type Role } from "@chatea/shared";
+import { Users } from "lucide-react";
 import { useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { authClient, useActiveOrganization, useSession } from "@/lib/auth-client";
@@ -38,7 +39,11 @@ export default function Page() {
 
   return (
     <>
-      <PageHeader title="Equipo" description="Quién tiene acceso a esta tienda y con qué rol." />
+      <PageHeader
+        icon={Users}
+        title="Equipo"
+        description="Quién tiene acceso a esta tienda y con qué rol."
+      />
       {canManage && (
         <form onSubmit={invite} className="card mb-6 flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1">
@@ -77,7 +82,7 @@ export default function Page() {
         </form>
       )}
       <ErrorText>{error}</ErrorText>
-      {notice && <p className="mb-4 text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>}
+      {notice && <p className="mb-4 text-sm text-brand-700 dark:text-brand-400">{notice}</p>}
 
       <div className="card divide-y divide-zinc-200 p-0 dark:divide-zinc-800">
         {org?.members.map((m) => (

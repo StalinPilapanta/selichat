@@ -1,3 +1,4 @@
+import { Plug } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "@/components/ui";
 import { INTEGRATIONS } from "@/lib/integrations";
@@ -6,6 +7,7 @@ export default function Page() {
   return (
     <>
       <PageHeader
+        icon={Plug}
         title="Integraciones"
         description="Conecta los servicios que usan tus agentes. Las credenciales se guardan cifradas."
       />
@@ -20,7 +22,7 @@ export default function Page() {
                     Próximamente · {i.phase}
                   </span>
                 ) : (
-                  <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+                  <span className="rounded bg-brand-100 px-2 py-0.5 text-xs text-brand-800 dark:bg-brand-900 dark:text-brand-200">
                     Disponible
                   </span>
                 )}
@@ -29,7 +31,7 @@ export default function Page() {
             </>
           );
           return i.href ? (
-            <Link key={i.key} href={i.href} className="card hover:border-emerald-500">
+            <Link key={i.key} href={i.href} className="card hover:border-brand-500">
               {body}
             </Link>
           ) : (

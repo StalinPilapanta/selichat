@@ -194,7 +194,7 @@ export function PromptEditor({
               key={m}
               type="button"
               onClick={() => update({ mode: m })}
-              className={`rounded-md px-3 py-1 ${draft.mode === m ? "bg-emerald-600 text-white" : ""}`}
+              className={`rounded-md px-3 py-1 ${draft.mode === m ? "bg-brand-600 text-white" : ""}`}
             >
               {m === "libre" ? "Libre (texto completo)" : "Guiado (maestro + secciones)"}
             </button>
@@ -213,7 +213,7 @@ export function PromptEditor({
               type="button"
               title={d}
               onClick={() => insertVar(k)}
-              className="rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-xs hover:bg-emerald-100 dark:bg-zinc-800 dark:hover:bg-emerald-900"
+              className="rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-xs hover:bg-brand-100 dark:bg-zinc-800 dark:hover:bg-brand-900"
             >
               {`{{${k}}}`}
             </button>
@@ -265,7 +265,7 @@ export function PromptEditor({
         </p>
       )}
       <ErrorText>{error}</ErrorText>
-      {notice && <p className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>}
+      {notice && <p className="text-sm text-brand-700 dark:text-brand-400">{notice}</p>}
 
       <div className="flex flex-wrap gap-2">
         <button type="button" className="btn" disabled={busy} onClick={() => save(true)}>
@@ -329,7 +329,7 @@ export function PromptEditor({
                     {v.note ? ` · ${v.note}` : ""}
                   </span>
                   {v.active && (
-                    <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+                    <span className="ml-2 rounded bg-brand-100 px-1.5 py-0.5 text-xs text-brand-800 dark:bg-brand-900 dark:text-brand-200">
                       activa
                     </span>
                   )}
@@ -337,7 +337,7 @@ export function PromptEditor({
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    className="text-emerald-700 hover:underline dark:text-emerald-400"
+                    className="text-brand-700 hover:underline dark:text-brand-400"
                     onClick={() => {
                       if (
                         dirty &&
@@ -358,7 +358,7 @@ export function PromptEditor({
                   {!v.active && (
                     <button
                       type="button"
-                      className="text-emerald-700 hover:underline dark:text-emerald-400"
+                      className="text-brand-700 hover:underline dark:text-brand-400"
                       onClick={() => publishVersion(v)}
                     >
                       Publicar

@@ -1,4 +1,5 @@
 "use client";
+import { FlaskConical } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { ApiError, api, errorMessage } from "@/lib/api";
@@ -38,7 +39,7 @@ function Bubble({ m }: { m: Msg }) {
       <div
         className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${
           mine
-            ? "bg-emerald-100 text-emerald-950 dark:bg-emerald-900 dark:text-emerald-50"
+            ? "bg-brand-100 text-brand-950 dark:bg-brand-900 dark:text-brand-50"
             : "bg-zinc-100 dark:bg-zinc-800"
         }`}
       >
@@ -137,7 +138,7 @@ function ManualChat({ productId }: { productId: string }) {
         <h2 className="font-medium">Chat de prueba</h2>
         <button
           type="button"
-          className="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+          className="text-sm text-brand-700 hover:underline dark:text-brand-400"
           onClick={restart}
         >
           Reiniciar
@@ -273,7 +274,7 @@ function Simulation({ productId }: { productId: string }) {
           <div
             className={`rounded-lg p-3 text-sm ${
               result.verdict.passed
-                ? "bg-emerald-50 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100"
+                ? "bg-brand-50 text-brand-900 dark:bg-brand-950 dark:text-brand-100"
                 : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100"
             }`}
           >
@@ -332,6 +333,7 @@ export default function Page() {
   return (
     <>
       <PageHeader
+        icon={FlaskConical}
         title="Probar agente"
         description="Conversa con tu agente de ventas o deja que una IA lo pruebe por ti, antes de que hable con clientes reales."
       />

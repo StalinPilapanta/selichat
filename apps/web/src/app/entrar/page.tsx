@@ -78,7 +78,7 @@ function LoginForm() {
           <div className="-mt-2 text-right">
             <Link
               href="/olvide-clave"
-              className="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+              className="text-sm text-brand-700 hover:underline dark:text-brand-400"
             >
               ¿Olvidaste tu contraseña?
             </Link>
@@ -90,7 +90,7 @@ function LoginForm() {
         </button>
         <button
           type="button"
-          className="w-full text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+          className="w-full text-sm text-brand-700 hover:underline dark:text-brand-400"
           onClick={() => setMode(mode === "password" ? "magic" : "password")}
         >
           {mode === "password"
@@ -111,7 +111,7 @@ function LoginForm() {
         ¿No tienes cuenta?{" "}
         <Link
           href={`/registro?next=${encodeURIComponent(next)}`}
-          className="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+          className="font-medium text-brand-700 hover:underline dark:text-brand-400"
         >
           Regístrate
         </Link>

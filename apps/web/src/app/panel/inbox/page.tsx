@@ -245,7 +245,7 @@ function Inbox() {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-8.5rem)] min-h-0 flex-col md:h-dvh md:flex-row">
+    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col md:h-dvh md:flex-row">
       <aside
         className={`min-h-0 flex-col border-zinc-200 bg-white md:w-80 md:border-r dark:border-zinc-800 dark:bg-zinc-900 ${
           selectedId ? "hidden md:flex" : "flex flex-1 md:flex-none"
@@ -254,7 +254,7 @@ function Inbox() {
         <div className="space-y-2 border-b border-zinc-200 p-3 dark:border-zinc-800">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Conversaciones</h1>
-            <span className={`text-xs ${live ? "text-emerald-600" : "text-zinc-400"}`}>
+            <span className={`text-xs ${live ? "text-brand-600" : "text-zinc-400"}`}>
               ● {live ? "en vivo" : "reconectando"}
             </span>
           </div>
@@ -271,7 +271,7 @@ function Inbox() {
                 key={f.key}
                 type="button"
                 onClick={() => setFilter(f.key)}
-                className={`rounded-full px-2.5 py-1 text-xs ${filter === f.key ? "bg-emerald-600 text-white" : "bg-zinc-100 dark:bg-zinc-800"}`}
+                className={`rounded-full px-2.5 py-1 text-xs ${filter === f.key ? "bg-brand-600 text-white" : "bg-zinc-100 dark:bg-zinc-800"}`}
               >
                 {f.label}
               </button>
@@ -295,7 +295,7 @@ function Inbox() {
               type="button"
               onClick={() => select(c.id)}
               className={`flex w-full gap-3 border-b border-zinc-100 px-3 py-3 text-left hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800 ${
-                c.id === selectedId ? "bg-emerald-50 dark:bg-emerald-950" : ""
+                c.id === selectedId ? "bg-brand-50 dark:bg-brand-950" : ""
               }`}
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-sm font-medium dark:bg-zinc-700">
@@ -313,7 +313,7 @@ function Inbox() {
                 <div className="flex items-center gap-1">
                   <span className="truncate text-sm text-zinc-500">{c.lastMessagePreview}</span>
                   {c.unreadCount > 0 && (
-                    <span className="ml-auto rounded-full bg-emerald-600 px-1.5 text-[11px] text-white">
+                    <span className="ml-auto rounded-full bg-brand-600 px-1.5 text-[11px] text-white">
                       {c.unreadCount}
                     </span>
                   )}

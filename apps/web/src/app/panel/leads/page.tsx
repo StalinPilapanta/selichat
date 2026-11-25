@@ -11,9 +11,10 @@ import {
   ORDER_STAGES,
   type OrderStage,
 } from "@chatea/shared";
+import { KanbanSquare } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { ErrorText, PageHeader } from "@/components/ui";
+import { EmptyState, ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
 
 type Lead = {
@@ -46,7 +47,7 @@ type Lead = {
 const COLUMN_STYLE: Record<LeadStage, string> = {
   interesado: "border-t-sky-500",
   datos: "border-t-amber-500",
-  ganado: "border-t-emerald-500",
+  ganado: "border-t-brand-500",
   en_agencia: "border-t-violet-500",
   cerrado: "border-t-zinc-400",
   perdido: "border-t-red-500",
@@ -89,7 +90,7 @@ function Card({
       <div className="flex items-start justify-between gap-2">
         <Link
           href={`/panel/inbox?c=${l.id}`}
-          className="truncate font-medium hover:text-emerald-700 dark:hover:text-emerald-400"
+          className="truncate font-medium hover:text-brand-700 dark:hover:text-brand-400"
         >
           {nameOf(l)}
         </Link>
@@ -147,7 +148,7 @@ function Card({
           </span>
         )}
         {l.unreadCount > 0 && (
-          <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-white">
+          <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-white">
             {l.unreadCount}
           </span>
         )}
@@ -286,19 +287,20 @@ export default function LeadsPage() {
   return (
     <>
       <PageHeader
+        icon={KanbanSquare}
         title="Leads"
         description="Cada conversación es un lead: avanza solo con la IA y con el estado del pedido en Dropi, y puedes moverlo a mano."
       />
-      <div className="mb-3 grid gap-2 sm:grid-cols-4">
-        <div className="card py-2">
+      <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="card px-4 py-3">
           <div className="text-xs text-zinc-500">En el embudo</div>
           <div className="text-lg font-semibold">
             {open.length} · {money(pipeline, currency)}
           </div>
         </div>
-        <div className="card py-2">
+        <div className="card px-4 py-3">
           <div className="text-xs text-zinc-500">Vendidos (ganado, en agencia, cerrado)</div>
-          <div className="text-lg font-semibold text-emerald-700 dark:text-emerald-400">
+          <div className="text-lg font-semibold text-brand-700 dark:text-brand-400">
             {won.length} ·{" "}
             {money(
               won.reduce((s, l) => s + leadValue(l), 0),
@@ -306,13 +308,13 @@ export default function LeadsPage() {
             )}
           </div>
         </div>
-        <div className="card py-2">
+        <div className="card px-4 py-3">
           <div className="text-xs text-zinc-500">
             Perdidos (últimas {LEAD_HIDE_HOURS.perdido} h)
           </div>
           <div className="text-lg font-semibold text-red-700 dark:text-red-400">{lost.length}</div>
         </div>
-        <div className="card py-2">
+        <div className="card px-4 py-3">
           <div className="text-xs text-zinc-500">Cierre (ganados / finalizados)</div>
           <div className="text-lg font-semibold">{rate == null ? "—" : `${rate}%`}</div>
         </div>
@@ -329,10 +331,19 @@ export default function LeadsPage() {
         </button>
       </div>
       <ErrorText>{error}</ErrorText>
-      {loaded && !leads.length && !error && (
-        <p className="text-sm text-zinc-500">
-          Aún no hay leads. Aparecen solos cuando un cliente escribe por WhatsApp.
-        </p>
+      {loaded && !leads.length && !error && !q && (
+        <div className="mb-4">
+          <EmptyState
+            icon={KanbanSquare}
+            title="Aún no hay leads"
+            description="Cada cliente que escribe por WhatsApp aparece aquí y avanza solo por las etapas mientras la IA le vende."
+            action={
+              <Link href="/panel/integraciones/whatsapp" className="btn">
+                Conectar WhatsApp
+              </Link>
+            }
+          />
+        </div>
       )}
       <div className="flex gap-3 overflow-x-auto pb-4">
         {LEAD_STAGE_KEYS.map((stage) => {
@@ -355,7 +366,7 @@ export default function LeadsPage() {
                 setDragging(null);
               }}
               className={`w-64 shrink-0 rounded-lg border-t-4 bg-zinc-50 p-2 dark:bg-zinc-950 ${COLUMN_STYLE[stage]} ${
-                over === stage && dragging ? "ring-2 ring-emerald-400" : ""
+                over === stage && dragging ? "ring-2 ring-brand-400" : ""
               }`}
             >
               <h2 className="mb-2 flex items-center justify-between text-sm font-medium">

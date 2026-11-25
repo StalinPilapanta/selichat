@@ -6,6 +6,7 @@ import {
   ORDER_STAGES,
   type OrderStage,
 } from "@chatea/shared";
+import { Package } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -70,7 +71,7 @@ const STAGE_STYLE: Partial<Record<OrderStage, string>> = {
   error_subida: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
   revision: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
   novedad: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-  entregado: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
+  entregado: "bg-brand-100 text-brand-800 dark:bg-brand-950 dark:text-brand-200",
   devolucion: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
 };
 
@@ -112,7 +113,7 @@ function Card({ o, onOpen }: { o: Order; onOpen: () => void }) {
     <button
       type="button"
       onClick={onOpen}
-      className="w-full rounded-lg border border-zinc-200 bg-white p-3 text-left text-sm hover:border-emerald-400 dark:border-zinc-800 dark:bg-zinc-900"
+      className="w-full rounded-lg border border-zinc-200 bg-white p-3 text-left text-sm hover:border-brand-400 dark:border-zinc-800 dark:bg-zinc-900"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate font-medium">{fullName(o.customer)}</span>
@@ -320,7 +321,7 @@ function OrderPanel({
             </div>
 
             <ErrorText>{error}</ErrorText>
-            {note && <p className="text-sm text-emerald-700 dark:text-emerald-400">{note}</p>}
+            {note && <p className="text-sm text-brand-700 dark:text-brand-400">{note}</p>}
             {local && (
               <div className="flex flex-wrap gap-2">
                 {o.stage === "revision" ? (
@@ -359,7 +360,7 @@ function OrderPanel({
             {o.conversationId && (
               <Link
                 href={`/panel/inbox?c=${o.conversationId}`}
-                className="block text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+                className="block text-sm text-brand-700 hover:underline dark:text-brand-400"
               >
                 Ver la conversación →
               </Link>
@@ -419,6 +420,7 @@ export default function OrdersPage() {
   return (
     <>
       <PageHeader
+        icon={Package}
         title="Pedidos"
         description="Ventas cerradas por la IA o por tu equipo, su subida a Dropi y su estado logístico."
       />

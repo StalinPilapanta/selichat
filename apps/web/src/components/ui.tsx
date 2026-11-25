@@ -1,3 +1,5 @@
+import { type LucideIcon, MessageCircle } from "lucide-react";
+
 export function ErrorText({ children }: { children?: React.ReactNode }) {
   if (!children) return null;
   return (
@@ -20,7 +22,7 @@ export function AuthShell({
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="text-2xl font-bold text-emerald-600">chatea</div>
+          <Logo className="justify-center text-2xl" />
           <h1 className="mt-4 text-xl font-semibold">{title}</h1>
           {subtitle && <p className="mt-1 text-sm text-zinc-500">{subtitle}</p>}
         </div>
@@ -30,11 +32,68 @@ export function AuthShell({
   );
 }
 
-export function PageHeader({ title, description }: { title: string; description?: string }) {
+/** Marca de la app: burbuja de chat con el nombre (luego, el logo y nombre de la tienda). */
+export function Logo({ className = "", name = "Selichat" }: { className?: string; name?: string }) {
   return (
-    <div className="mb-6">
-      <h1 className="text-2xl font-semibold">{title}</h1>
-      {description && <p className="mt-1 text-sm text-zinc-500">{description}</p>}
+    <div className={`flex items-center gap-2 font-bold tracking-tight ${className}`}>
+      <span className="grid size-8 place-items-center rounded-xl bg-brand-600 text-brand-ink shadow-sm">
+        <MessageCircle className="size-4.5" strokeWidth={2.5} />
+      </span>
+      <span>{name}</span>
+    </div>
+  );
+}
+
+export function PageHeader({
+  title,
+  description,
+  icon: Icon,
+  actions,
+}: {
+  title: string;
+  description?: string;
+  icon?: LucideIcon;
+  /** Botones a la derecha del título. */
+  actions?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+      <div className="flex min-w-0 items-start gap-3">
+        {Icon && (
+          <span className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-2xl bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
+            <Icon className="size-5" />
+          </span>
+        )}
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          {description && <p className="mt-1 text-sm text-zinc-500">{description}</p>}
+        </div>
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/** Pantalla vacía amigable: ícono, qué pasa y qué hacer. */
+export function EmptyState({
+  icon: Icon,
+  title,
+  description,
+  action,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center rounded-2xl border border-dashed border-zinc-300 px-6 py-12 text-center dark:border-zinc-700">
+      <span className="grid size-12 place-items-center rounded-full bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
+        <Icon className="size-6" />
+      </span>
+      <h2 className="mt-3 font-semibold">{title}</h2>
+      {description && <p className="mt-1 max-w-sm text-sm text-zinc-500">{description}</p>}
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }

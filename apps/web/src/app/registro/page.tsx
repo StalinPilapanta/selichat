@@ -80,7 +80,7 @@ function SignUpForm() {
         ¿Ya tienes cuenta?{" "}
         <Link
           href={`/entrar?next=${encodeURIComponent(next)}`}
-          className="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+          className="font-medium text-brand-700 hover:underline dark:text-brand-400"
         >
           Entra
         </Link>

@@ -1,4 +1,5 @@
 "use client";
+import { Bot } from "lucide-react";
 import { useState } from "react";
 import { PromptEditor } from "@/components/PromptEditor";
 import { PageHeader } from "@/components/ui";
@@ -19,6 +20,7 @@ export default function Page() {
   return (
     <>
       <PageHeader
+        icon={Bot}
         title="Prompts de la tienda"
         description="Capas que comparten todos tus productos. Cada guardado crea una versión; puedes volver a cualquier versión anterior."
       />
@@ -30,7 +32,7 @@ export default function Page() {
             onClick={() => setTab(k)}
             className={`-mb-px border-b-2 px-3 py-2 text-sm ${
               tab === k
-                ? "border-emerald-600 font-medium text-emerald-700 dark:text-emerald-400"
+                ? "border-brand-600 font-medium text-brand-700 dark:text-brand-400"
                 : "border-transparent text-zinc-500"
             }`}
           >

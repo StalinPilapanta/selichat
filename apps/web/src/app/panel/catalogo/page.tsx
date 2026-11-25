@@ -1,4 +1,5 @@
 "use client";
+import { ShoppingBag } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -32,6 +33,7 @@ export default function Page() {
   return (
     <>
       <PageHeader
+        icon={ShoppingBag}
         title="Catálogo"
         description="Productos que venden tus agentes, con sus ofertas, multimedia, disparadores y prompt."
       />
@@ -65,7 +67,7 @@ export default function Page() {
           <Link
             key={r.id}
             href={`/panel/catalogo/${r.id}`}
-            className="card flex gap-4 p-4 hover:border-emerald-500"
+            className="card flex gap-4 p-4 hover:border-brand-500"
           >
             {r.imageUrl ? (
               // biome-ignore lint/performance/noImgElement: imagen externa del producto

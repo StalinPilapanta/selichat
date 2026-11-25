@@ -80,7 +80,7 @@ export default function Page() {
       <p>
         Puedes solicitar acceso, rectificación o eliminación de tus datos. Si eres cliente de una
         tienda, también puedes dirigirte directamente a ella. Consulta cómo pedir la eliminación en{" "}
-        <a className="text-emerald-700 underline" href="/eliminacion-de-datos">
+        <a className="text-brand-700 underline" href="/eliminacion-de-datos">
           Eliminación de datos
         </a>
         .
@@ -91,7 +91,7 @@ export default function Page() {
         {email ? (
           <>
             Para cualquier consulta sobre privacidad escríbenos a{" "}
-            <a className="text-emerald-700 underline" href={`mailto:${email}`}>
+            <a className="text-brand-700 underline" href={`mailto:${email}`}>
               {email}
             </a>
             .

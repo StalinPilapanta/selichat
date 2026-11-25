@@ -1,4 +1,5 @@
 "use client";
+import { MessageCircle } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -29,7 +30,7 @@ type Template = {
 };
 
 const STATUS_STYLE: Record<string, string> = {
-  APPROVED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+  APPROVED: "bg-brand-100 text-brand-800 dark:bg-brand-900 dark:text-brand-200",
   PENDING: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
   REJECTED: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
 };
@@ -505,7 +506,7 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
         </button>
       </div>
       <ErrorText>{error}</ErrorText>
-      {notice && <p className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>}
+      {notice && <p className="text-sm text-brand-700 dark:text-brand-400">{notice}</p>}
 
       <Templates channel={ch} />
     </div>
@@ -531,6 +532,7 @@ export default function Page() {
         </Link>
       </div>
       <PageHeader
+        icon={MessageCircle}
         title="WhatsApp"
         description="Conecta tu número de WhatsApp Business por la API oficial de Meta (Cloud API). Los mensajes llegan a Conversaciones."
       />

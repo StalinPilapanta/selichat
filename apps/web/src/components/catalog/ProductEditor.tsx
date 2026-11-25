@@ -466,7 +466,7 @@ export function ProductEditor({
             onClick={() => setTab(t)}
             className={`-mb-px border-b-2 px-3 py-2 text-sm whitespace-nowrap ${
               tab === t
-                ? "border-emerald-600 font-medium text-emerald-700 dark:text-emerald-400"
+                ? "border-brand-600 font-medium text-brand-700 dark:text-brand-400"
                 : "border-transparent text-zinc-500"
             }`}
           >
@@ -911,9 +911,7 @@ export function ProductEditor({
           >
             {productId ? "Guardar cambios" : "Crear producto"}
           </button>
-          {saved && (
-            <span className="text-sm text-emerald-700 dark:text-emerald-400">Guardado ✓</span>
-          )}
+          {saved && <span className="text-sm text-brand-700 dark:text-brand-400">Guardado ✓</span>}
           {productId && (
             <button
               type="button"

@@ -104,6 +104,17 @@ export async function inboxRoutes(
     },
   };
 
+  /** Conversaciones abiertas con mensajes sin leer (contador del menú). */
+  app.get("/api/conversations/unread-count", { preHandler: anyMember }, async (req) => {
+    const [r] = await withTenant(db, req.ctx.tenantId, (tx) =>
+      tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(conversations)
+        .where(and(eq(conversations.status, "abierta"), sql`${conversations.unreadCount} > 0`)),
+    );
+    return { conversations: r?.n ?? 0 };
+  });
+
   app.get("/api/conversations", { preHandler: anyMember }, async (req, reply) => {
     const q = listQuery.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: "datos_invalidos" });

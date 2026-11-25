@@ -109,7 +109,7 @@ export function MessageBubble({ m, team }: { m: Message; team: TeamMember[] }) {
           out
             ? m.status === "fallido"
               ? "bg-red-50 dark:bg-red-950"
-              : "bg-emerald-100 dark:bg-emerald-900"
+              : "bg-brand-100 dark:bg-brand-900"
             : "bg-white dark:bg-zinc-800"
         }`}
       >

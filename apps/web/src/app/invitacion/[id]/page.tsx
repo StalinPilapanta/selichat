@@ -32,7 +32,7 @@ export default function Page() {
   if (!isPending && !session) {
     return (
       <AuthShell
-        title="Te invitaron a Chatea"
+        title="Te invitaron a Selichat"
         subtitle="Entra o crea una cuenta con el correo al que llegó la invitación."
       >
         <div className="space-y-3">

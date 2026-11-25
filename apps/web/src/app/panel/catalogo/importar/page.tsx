@@ -1,4 +1,5 @@
 "use client";
+import { Download } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -84,6 +85,7 @@ export default function Page() {
         </Link>
       </div>
       <PageHeader
+        icon={Download}
         title="Importar desde Chatea Pro"
         description="Trae tus productos, disparadores, multimedia, recordatorios y prompts. Puedes repetirlo: los productos ya importados se actualizan, no se duplican."
       />
@@ -184,7 +186,7 @@ export default function Page() {
       {result && (
         <div className="space-y-3">
           <div className="card space-y-2">
-            <div className="font-medium text-emerald-700 dark:text-emerald-400">
+            <div className="font-medium text-brand-700 dark:text-brand-400">
               Importación terminada
             </div>
             {result.products.map((p) => (

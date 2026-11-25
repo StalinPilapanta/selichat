@@ -16,7 +16,7 @@ export function LegalPage({
 }) {
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
-      <Link href="/" className="text-xl font-bold text-emerald-600">
+      <Link href="/" className="text-xl font-bold text-brand-600">
         selichat
       </Link>
       <h1 className="mt-6 text-3xl font-semibold">{title}</h1>

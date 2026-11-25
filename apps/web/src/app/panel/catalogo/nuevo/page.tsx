@@ -1,4 +1,5 @@
 "use client";
+import { PackagePlus } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -67,7 +68,7 @@ function NewProduct() {
 
   return (
     <>
-      <PageHeader title="Nuevo producto" />
+      <PageHeader icon={PackagePlus} title="Nuevo producto" />
       {wantsAi && (
         <div className="card mb-6 space-y-3">
           <div className="font-medium">Crear con IA desde la ficha</div>
@@ -96,7 +97,7 @@ function NewProduct() {
           </button>
           <ErrorText>{error}</ErrorText>
           {prompt && (
-            <p className="text-sm text-emerald-700 dark:text-emerald-400">
+            <p className="text-sm text-brand-700 dark:text-brand-400">
               Listo. Revisa las pestañas; el prompt guiado se guardará como borrador al crear el
               producto.
             </p>

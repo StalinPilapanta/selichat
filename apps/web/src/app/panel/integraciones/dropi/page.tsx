@@ -1,5 +1,6 @@
 "use client";
 import { DROPI_COUNTRIES, type DropiCountry, type DropiOptions } from "@chatea/shared";
+import { Truck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
@@ -134,6 +135,7 @@ export default function DropiPage() {
   return (
     <>
       <PageHeader
+        icon={Truck}
         title="Dropi"
         description="Cuando el cliente confirma con la IA, el pedido se sube a Dropi y su estado vuelve aquí."
       />
@@ -142,7 +144,7 @@ export default function DropiPage() {
           <div className="flex items-center justify-between">
             <h2 className="font-medium">Conexión</h2>
             {info.connected ? (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+              <span className="rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-800 dark:bg-brand-900 dark:text-brand-200">
                 {mcp
                   ? info.authError
                     ? "Requiere volver a autorizar"
@@ -531,7 +533,7 @@ export default function DropiPage() {
         )}
 
         <ErrorText>{error}</ErrorText>
-        {saved && <p className="text-sm text-emerald-700 dark:text-emerald-400">{saved}</p>}
+        {saved && <p className="text-sm text-brand-700 dark:text-brand-400">{saved}</p>}
         <div className="flex items-center gap-3">
           {(info.connected || token.trim()) && (
             <button

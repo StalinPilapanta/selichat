@@ -15,7 +15,7 @@ export default function Page() {
           {email ? (
             <>
               O envía un correo a{" "}
-              <a className="text-emerald-700 underline" href={`mailto:${email}`}>
+              <a className="text-brand-700 underline" href={`mailto:${email}`}>
                 {email}
               </a>{" "}
               indicando tu número de WhatsApp (con código de país) y el nombre de la tienda.
@@ -42,7 +42,7 @@ export default function Page() {
             <>
               {" "}
               a{" "}
-              <a className="text-emerald-700 underline" href={`mailto:${email}`}>
+              <a className="text-brand-700 underline" href={`mailto:${email}`}>
                 {email}
               </a>
             </>
