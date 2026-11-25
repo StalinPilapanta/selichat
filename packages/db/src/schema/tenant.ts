@@ -26,6 +26,10 @@ export const tenantSettings = pgTable("tenant_settings", {
     .$type<{ start: string; end: string }>()
     .notNull()
     .default({ start: "08:00", end: "22:00" }),
+  /** Branding: nombre, color (#RRGGBB) y logo de la tienda; null = el de Selichat. */
+  brandName: text("brand_name"),
+  brandColor: text("brand_color"),
+  logoUrl: text("logo_url"),
   ...timestamps,
 });
 

@@ -361,7 +361,7 @@ function Fingerprint({ conversationId }: { conversationId: string }) {
     rate == null
       ? "border-zinc-200 dark:border-zinc-800"
       : rate >= 70
-        ? "border-brand-300 bg-brand-50 dark:border-brand-800 dark:bg-brand-950"
+        ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950"
         : rate >= 40
           ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
           : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950";

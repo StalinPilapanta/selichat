@@ -91,6 +91,35 @@ describe.skipIf(!hasDb)("API (integración)", () => {
     );
     expect((await call(ana.cookie, "GET", "/api/ai-providers")).json()).toHaveLength(1);
     expect(orgB.id).not.toBe(orgA.id);
+
+    // Marca de la tienda: nombre, color y logo (solo archivos subidos a esta tienda).
+    const own = `http://localhost:3100/api/files/${orgA.id}/0e4b1b64-6c8c-4b7a-9f0e-3a1d2c3b4a5f.png`;
+    const brand = await call(ana.cookie, "PUT", "/api/settings/branding", {
+      name: "NatureVita",
+      color: "#2563EB",
+      logoUrl: own,
+    });
+    expect(brand.statusCode, brand.body).toBe(200);
+    expect((await call(ana.cookie, "GET", "/api/settings")).json()).toMatchObject({
+      brandName: "NatureVita",
+      brandColor: "#2563eb",
+      logoUrl: own,
+      country: "EC", // lo demás de la configuración no cambia
+    });
+    const foreign = await call(ana.cookie, "PUT", "/api/settings/branding", {
+      name: "X",
+      color: "#2563eb",
+      logoUrl: `http://localhost:3100/api/files/${orgB.id}/0e4b1b64-6c8c-4b7a-9f0e-3a1d2c3b4a5f.png`,
+    });
+    expect(foreign.statusCode).toBe(400);
+    const badColor = await call(ana.cookie, "PUT", "/api/settings/branding", {
+      name: null,
+      color: "verde",
+      logoUrl: null,
+    });
+    expect(badColor.statusCode).toBe(400);
+    // Beto no ve la marca de Ana.
+    expect((await call(beto.cookie, "GET", "/api/settings")).json().brandName).toBeNull();
   });
 
   it("lista modelos en vivo del proveedor y bloquea URLs internas", async () => {

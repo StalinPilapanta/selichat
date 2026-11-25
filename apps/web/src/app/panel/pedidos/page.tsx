@@ -71,7 +71,7 @@ const STAGE_STYLE: Partial<Record<OrderStage, string>> = {
   error_subida: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
   revision: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
   novedad: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-  entregado: "bg-brand-100 text-brand-800 dark:bg-brand-950 dark:text-brand-200",
+  entregado: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
   devolucion: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
 };
 

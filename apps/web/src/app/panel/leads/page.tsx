@@ -47,7 +47,7 @@ type Lead = {
 const COLUMN_STYLE: Record<LeadStage, string> = {
   interesado: "border-t-sky-500",
   datos: "border-t-amber-500",
-  ganado: "border-t-brand-500",
+  ganado: "border-t-emerald-500", // vendido: siempre verde, sea cual sea la marca
   en_agencia: "border-t-violet-500",
   cerrado: "border-t-zinc-400",
   perdido: "border-t-red-500",
@@ -300,7 +300,7 @@ export default function LeadsPage() {
         </div>
         <div className="card px-4 py-3">
           <div className="text-xs text-zinc-500">Vendidos (ganado, en agencia, cerrado)</div>
-          <div className="text-lg font-semibold text-brand-700 dark:text-brand-400">
+          <div className="text-lg font-semibold text-emerald-700 dark:text-emerald-400">
             {won.length} ·{" "}
             {money(
               won.reduce((s, l) => s + leadValue(l), 0),

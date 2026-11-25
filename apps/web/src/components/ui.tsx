@@ -32,14 +32,27 @@ export function AuthShell({
   );
 }
 
-/** Marca de la app: burbuja de chat con el nombre (luego, el logo y nombre de la tienda). */
-export function Logo({ className = "", name = "Selichat" }: { className?: string; name?: string }) {
+/** Marca: el logo de la tienda (o una burbuja de chat) con su nombre. */
+export function Logo({
+  className = "",
+  name = "Selichat",
+  logoUrl,
+}: {
+  className?: string;
+  name?: string;
+  logoUrl?: string | null;
+}) {
   return (
-    <div className={`flex items-center gap-2 font-bold tracking-tight ${className}`}>
-      <span className="grid size-8 place-items-center rounded-xl bg-brand-600 text-brand-ink shadow-sm">
-        <MessageCircle className="size-4.5" strokeWidth={2.5} />
-      </span>
-      <span>{name}</span>
+    <div className={`flex min-w-0 items-center gap-2 font-bold tracking-tight ${className}`}>
+      {logoUrl ? (
+        // biome-ignore lint/performance/noImgElement: logo subido por la tienda (dominio propio)
+        <img src={logoUrl} alt="" className="size-8 shrink-0 rounded-xl object-contain" />
+      ) : (
+        <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-brand-600 text-brand-ink shadow-sm">
+          <MessageCircle className="size-4.5" strokeWidth={2.5} />
+        </span>
+      )}
+      <span className="truncate">{name}</span>
     </div>
   );
 }

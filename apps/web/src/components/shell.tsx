@@ -29,6 +29,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useBranding } from "@/lib/branding";
 import { INTEGRATIONS } from "@/lib/integrations";
 
 export type NavItem = {
@@ -461,6 +462,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const unread = useUnread();
+  const brand = useBranding();
   const [drawer, setDrawer] = useState(false);
   const [palette, setPalette] = useState(false);
 
@@ -483,8 +485,8 @@ export function AppShell({
   const sidebar = (
     <div className="flex h-full flex-col">
       <div className="px-3 pt-4 pb-3">
-        <Link href="/panel" className="inline-flex">
-          <Logo className="text-lg" />
+        <Link href="/panel" className="inline-flex max-w-full">
+          <Logo className="text-lg" name={brand.name} logoUrl={brand.logoUrl} />
         </Link>
       </div>
       <div className="px-3 pb-3">
@@ -528,8 +530,10 @@ export function AppShell({
         >
           <Menu />
         </button>
-        <Logo className="text-base" />
-        <span className="ml-1 truncate text-sm text-zinc-500">{storeName}</span>
+        <Logo className="text-base" name={brand.name} logoUrl={brand.logoUrl} />
+        {brand.name !== storeName && (
+          <span className="ml-1 truncate text-sm text-zinc-500">{storeName}</span>
+        )}
         <button
           type="button"
           className="btn-quiet btn-icon ml-auto"

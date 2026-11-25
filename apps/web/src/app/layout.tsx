@@ -8,10 +8,10 @@ export const metadata: Metadata = {
 };
 
 /**
- * Tema antes de pintar (sin parpadeo): «claro», «oscuro» o «sistema» (por defecto), guardado
- * en este navegador.
+ * Antes de pintar (sin parpadeo): el tema («claro», «oscuro» o «sistema», por defecto) y los
+ * colores de la marca de la tienda guardados en este navegador.
  */
-const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem("tema")||"sistema";var d=t==="oscuro"||(t==="sistema"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light"}catch(e){}})();`;
+const THEME_SCRIPT = `(function(){try{var r=document.documentElement;var t=localStorage.getItem("tema")||"sistema";var d=t==="oscuro"||(t==="sistema"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";var m=JSON.parse(localStorage.getItem("marca")||"null");if(m&&m.vars){for(var k in m.vars){if(/^--brand-[a-z0-9]+$/.test(k)&&/^#[0-9a-f]{6}$/i.test(m.vars[k]))r.style.setProperty(k,m.vars[k])}}}catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

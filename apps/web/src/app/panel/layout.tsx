@@ -8,6 +8,7 @@ import {
   useListOrganizations,
   useSession,
 } from "@/lib/auth-client";
+import { BrandingProvider } from "@/lib/branding";
 
 export default function PanelLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -56,18 +57,20 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
     ) : undefined;
 
   return (
-    <AppShell
-      user={{ name: session.user.name, email: session.user.email }}
-      storeName={active.name}
-      storeSwitcher={switcher}
-      fullBleed={pathname.startsWith("/panel/inbox")}
-      wide={pathname.startsWith("/panel/leads") || pathname.startsWith("/panel/pedidos")}
-      onSignOut={async () => {
-        await authClient.signOut();
-        router.replace("/entrar");
-      }}
-    >
-      {children}
-    </AppShell>
+    <BrandingProvider tenantId={active.id}>
+      <AppShell
+        user={{ name: session.user.name, email: session.user.email }}
+        storeName={active.name}
+        storeSwitcher={switcher}
+        fullBleed={pathname.startsWith("/panel/inbox")}
+        wide={pathname.startsWith("/panel/leads") || pathname.startsWith("/panel/pedidos")}
+        onSignOut={async () => {
+          await authClient.signOut();
+          router.replace("/entrar");
+        }}
+      >
+        {children}
+      </AppShell>
+    </BrandingProvider>
   );
 }

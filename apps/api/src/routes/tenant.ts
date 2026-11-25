@@ -3,6 +3,7 @@ import {
   AGENT_KINDS,
   type AiProviderKind,
   aiProviderInputSchema,
+  brandingSchema,
   CURRENCY_CODES,
   decryptSecret,
   encryptSecret,
@@ -67,6 +68,36 @@ export async function tenantRoutes(
         .onConflictDoUpdate({ target: schema.tenantSettings.tenantId, set: body.data })
         .returning();
       await audit(tx, req.ctx.userId, "settings.updated");
+      return row;
+    });
+  });
+
+  // --- Branding (nombre, color y logo de la tienda) ---
+  app.put("/api/settings/branding", { preHandler: admins }, async (req, reply) => {
+    const body = brandingSchema.safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({
+        error: "datos_invalidos",
+        message: body.error.issues[0]?.message,
+      });
+    const { name, color, logoUrl } = body.data;
+    // El logo tiene que ser un archivo subido a esta tienda (no una URL cualquiera).
+    if (logoUrl && !new URL(logoUrl).pathname.startsWith(`/api/files/${req.ctx.tenantId}/`))
+      return reply
+        .code(400)
+        .send({ error: "datos_invalidos", message: "Sube el logo desde aquí." });
+    const values = {
+      brandName: name?.trim() || null,
+      brandColor: color?.toLowerCase() ?? null,
+      logoUrl: logoUrl || null,
+    };
+    return withTenant(db, req.ctx.tenantId, async (tx) => {
+      const [row] = await tx
+        .insert(schema.tenantSettings)
+        .values(values)
+        .onConflictDoUpdate({ target: schema.tenantSettings.tenantId, set: values })
+        .returning();
+      await audit(tx, req.ctx.userId, "branding.updated");
       return row;
     });
   });
