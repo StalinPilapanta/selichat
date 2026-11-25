@@ -21,12 +21,14 @@ import { aiRoutes } from "./routes/ai.js";
 import { authRoutes } from "./routes/auth.js";
 import { type ImportDeps, importRoutes } from "./routes/import.js";
 import { inboxRoutes } from "./routes/inbox.js";
+import { leadRoutes } from "./routes/leads.js";
 import { orderRoutes } from "./routes/orders.js";
 import { productRoutes } from "./routes/products.js";
 import { promptRoutes } from "./routes/prompts.js";
 import { tenantRoutes } from "./routes/tenant.js";
 import { uploadRoutes } from "./routes/uploads.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
+import { runLeadHousekeeping } from "./services/leads.js";
 
 export interface AppDeps extends ImportDeps {
   resolveModel?: ModelResolver;
@@ -144,6 +146,8 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
           followUpsBusy = true;
           try {
             await runFollowUps({ db, wa, bus, resolveModel, log: app.log });
+            // Interesados que no volvieron a escribir → perdidos («No responde»).
+            await runLeadHousekeeping(db);
           } catch (err) {
             app.log.error({ err }, "falló la pasada de recordatorios");
           } finally {
@@ -186,6 +190,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
     onStage,
   });
   await app.register(inboxRoutes, { auth, db, bus, wa, uploadDir: env.UPLOAD_DIR });
+  await app.register(leadRoutes, { auth, db, bus });
   await app.register(uploadRoutes, {
     auth,
     db,

@@ -2,6 +2,7 @@ import { schema, type Tx } from "@chatea/db";
 import { decryptSecret, normalizeRecipient } from "@chatea/shared";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { InboxEvent } from "../realtime.js";
+import { reopenOnInbound } from "../services/leads.js";
 import { Graph, type OutgoingPayload } from "./graph.js";
 import { type InboundMessage, type ParsedWebhook, previewOf, type StatusUpdate } from "./parse.js";
 
@@ -144,6 +145,8 @@ export async function ingestWebhook(
         productId,
       })
       .where(eq(conversations.id, conv.id));
+    // Volvió a escribir: si se había perdido por no responder (o ya salió del tablero), se reabre.
+    await reopenOnInbound(tx, conv.id);
     events.push({ type: "message", conversationId: conv.id, messageId: inserted.id });
   }
 

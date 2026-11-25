@@ -31,6 +31,7 @@ import {
 } from "../orders/service.js";
 import type { RealtimeBus } from "../realtime.js";
 import { loadProduct } from "../services/catalog.js";
+import { advanceLead } from "../services/leads.js";
 import {
   type SendInput,
   sendToConversation,
@@ -300,6 +301,7 @@ async function salesTurn(
                 .update(conversations)
                 .set({ productId })
                 .where(eq(conversations.id, conversationId));
+              await advanceLead(tx, conversationId, "interesado");
               return true;
             }),
         },
@@ -446,6 +448,11 @@ async function saveCheckout(
           : {}),
       })
       .where(eq(conversations.id, conversationId));
+    // El lead sigue a la etapa de la venta (solo hacia adelante).
+    if (state.etapa === "datos") await advanceLead(tx, conversationId, "datos");
+    else if (state.etapa === "confirmado") await advanceLead(tx, conversationId, "ganado");
+    else if (state.etapa === "cancelado")
+      await advanceLead(tx, conversationId, "perdido", { lostReason: "cancelo" });
   });
 }
 

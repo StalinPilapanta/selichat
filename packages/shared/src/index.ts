@@ -4,6 +4,7 @@ export * from "./catalog.js";
 export * from "./checkout.js";
 export * from "./crypto.js";
 export * from "./currencies.js";
+export * from "./leads.js";
 export * from "./orders.js";
 export * from "./prompts.js";
 export * from "./roles.js";

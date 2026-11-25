@@ -1018,6 +1018,10 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
       products: [{ id: 777, quantity: 2 }],
     });
 
+    // La venta cerrada deja el lead en «Ganado» con el valor del pedido.
+    const [lead] = (await h.call(s.cookie, "GET", "/api/leads")).json();
+    expect(lead).toMatchObject({ stage: "ganado", orderTotal: "49.99" });
+
     // Volver a confirmar no duplica el pedido.
     const count = dropiOrders.length;
     const again = await h.call(
@@ -1046,6 +1050,8 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     await hook({ objects: { id: String(id), status: "ENTREGADO" } });
     detail = (await h.call(s.cookie, "GET", `/api/orders/${order.id}`)).json();
     expect(detail.stage).toBe("entregado");
+    // Entregado: el lead pasa a «Cerrado» (sale del tablero a las 72 h).
+    expect((await h.call(s.cookie, "GET", "/api/leads")).json()[0].stage).toBe("cerrado");
     expect(detail.events.map((e: { source: string }) => e.source)).toContain("dropi");
 
     // Los datos del pedido y la ficha quedan con la ciudad y provincia de Dropi.
@@ -1266,6 +1272,9 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     await dropiSync?.();
     detail = (await h.call(o.cookie, "GET", `/api/orders/${order.id}`)).json();
     expect(detail.stage).toBe("en_oficina");
+    // En la agencia: el lead pasa a «En agencia» con el estado del pedido.
+    const [inAgency] = (await h.call(o.cookie, "GET", "/api/leads")).json();
+    expect(inAgency).toMatchObject({ stage: "en_agencia", order: { dropiOrderId: "9001" } });
     const avisos = detail.events.filter((e: { message: string }) =>
       e.message.startsWith("Aviso de llegada a la agencia"),
     );

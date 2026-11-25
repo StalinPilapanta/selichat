@@ -111,9 +111,19 @@ export const conversations = pgTable(
     handoffReason: text("handoff_reason"),
     /** Recordatorios ya enviados desde el último mensaje del cliente (se reinicia al escribir). */
     followUpsSent: integer("follow_ups_sent").notNull().default(0),
+    /**
+     * Lead (embudo de ventas, como Kommo):
+     * interesado | datos | ganado | en_agencia | cerrado | perdido (ver @chatea/shared leads).
+     * Avanza solo con la IA y los pedidos; un asesor puede moverlo a mano.
+     */
+    leadStage: text("lead_stage").notNull().default("interesado"),
+    leadStageAt: timestamp("lead_stage_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Motivo cuando el lead se pierde (precio, sin cobertura, no responde…). */
+    lostReason: text("lost_reason"),
     ...timestamps,
   },
   (t) => [
+    index("conversations_tenant_lead_idx").on(t.tenantId, t.leadStage, t.leadStageAt),
     uniqueIndex("conversations_contact_channel_uq").on(t.tenantId, t.contactId, t.channelId),
     index("conversations_tenant_last_idx").on(t.tenantId, t.lastMessageAt),
   ],

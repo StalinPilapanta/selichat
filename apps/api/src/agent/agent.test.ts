@@ -3,6 +3,7 @@ import { MockLanguageModelV4, MockTranscriptionModelV4 } from "ai/test";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RealtimeBus } from "../realtime.js";
+import { runLeadHousekeeping } from "../services/leads.js";
 import { client, hasDb, testApp } from "../test-helpers.js";
 import { sign } from "../whatsapp/signature.js";
 import { dueStep, inSendingHours, runFollowUps } from "./followups.js";
@@ -306,6 +307,31 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
       etapa: "datos",
     });
 
+    // Lead: entró por la palabra clave (Interesado) y al dar datos pasó a «Datos».
+    const leads = (await h.call(o.cookie, "GET", "/api/leads")).json();
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({ id: conv.id, stage: "datos", productName: "Mega Red" });
+    expect(leads[0].price).toBe("27.99");
+    // Moverlo a mano: perdido exige motivo; luego se puede reabrir.
+    const noReason = await h.call(o.cookie, "PATCH", `/api/leads/${conv.id}`, { stage: "perdido" });
+    expect(noReason.statusCode).toBe(400);
+    expect(
+      (
+        await h.call(o.cookie, "PATCH", `/api/leads/${conv.id}`, {
+          stage: "perdido",
+          lostReason: "precio",
+        })
+      ).statusCode,
+    ).toBe(200);
+    const lostLead = (await h.call(o.cookie, "GET", "/api/leads")).json()[0];
+    expect(lostLead).toMatchObject({ stage: "perdido", lostReason: "precio" });
+    await h.call(o.cookie, "PATCH", `/api/leads/${conv.id}`, { stage: "datos" });
+    // Un perdido no vuelve solo al embudo: lo reabrió el asesor.
+    expect((await h.call(o.cookie, "GET", "/api/leads")).json()[0]).toMatchObject({
+      stage: "datos",
+      lostReason: null,
+    });
+
     // El proveedor de IA falla: no responde, y la ficha dice por qué.
     failNext = true;
     const before = sent.length;
@@ -389,6 +415,34 @@ describe.skipIf(!hasDb)("agente de ventas (webhook → IA → WhatsApp)", () => 
       const afterReply = sent.length;
       await runFollowUps(deps, later(31), [o.org.id]);
       expect(texts(afterReply)).toEqual(["¿Sigues interesada? 😊"]);
+
+      // Lead interesado que no vuelve a escribir: a las 48 h pasa a perdido («No responde»)…
+      const [fc] = (await h.call(o.cookie, "GET", "/api/conversations")).json();
+      await h.call(o.cookie, "PATCH", `/api/leads/${fc.id}`, { stage: "interesado" });
+      await runLeadHousekeeping(db, later(47 * 60));
+      expect((await h.call(o.cookie, "GET", "/api/leads")).json()[0].stage).toBe("interesado");
+      await runLeadHousekeeping(db, later(49 * 60));
+      expect((await h.call(o.cookie, "GET", "/api/leads")).json()[0]).toMatchObject({
+        stage: "perdido",
+        lostReason: "no_responde",
+      });
+      // …y si escribe otra vez vuelve a Interesado.
+      await webhook("wamid.FU3", "hola, sigo interesada");
+      const [back] = (await h.call(o.cookie, "GET", "/api/leads")).json();
+      expect(back.stage === "interesado" || back.stage === "datos").toBe(true);
+      expect(back.lostReason).toBeNull();
+
+      // Perdido: a las 48 h el lead se borra (la conversación); antes, no.
+      await h.call(o.cookie, "PATCH", `/api/leads/${back.id}`, {
+        stage: "perdido",
+        lostReason: "precio",
+      });
+      await runLeadHousekeeping(db, later(47 * 60));
+      expect((await h.call(o.cookie, "GET", "/api/leads")).json()).toHaveLength(1);
+      const r = await runLeadHousekeeping(db, later(49 * 60));
+      expect(r.deleted).toBeGreaterThanOrEqual(1);
+      expect((await h.call(o.cookie, "GET", "/api/leads")).json()).toHaveLength(0);
+      expect((await h.call(o.cookie, "GET", "/api/conversations")).json()).toHaveLength(0);
     } finally {
       await pg.end();
     }

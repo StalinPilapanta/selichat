@@ -30,6 +30,7 @@ import {
 } from "../dropi/client.js";
 import { DropiMcpClient, type McpTokens } from "../dropi/mcp.js";
 import { loadProduct } from "../services/catalog.js";
+import { advanceLead, syncLeadFromOrder } from "../services/leads.js";
 
 const {
   orders,
@@ -552,6 +553,8 @@ export async function createOrderFromConversation(
       })
       .returning();
     if (!order) throw new OrderError("No se pudo crear el pedido.");
+    // Pedido = lead ganado (aunque estuviera perdido: el cliente volvió y compró).
+    await advanceLead(tx, conversationId, "ganado", { force: true });
     // Con pedido la venta está cerrada: no más recordatorios de venta para esta conversación.
     if (st.etapa !== "confirmado")
       await tx
@@ -903,6 +906,9 @@ export async function applyDropiStatus(
         ...(ev.carrier ? { carrier: ev.carrier } : {}),
       })
       .where(eq(orders.id, order.id));
+    // El lead sigue al pedido: en agencia, entregado (cerrado), devuelto (perdido).
+    if (stage && stage !== order.stage && order.conversationId)
+      await syncLeadFromOrder(tx, order.conversationId, stage);
     await tx.insert(orderEvents).values({
       orderId: order.id,
       source: "dropi",

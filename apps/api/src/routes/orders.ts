@@ -11,7 +11,7 @@ import {
   ORDER_STAGE_KEYS,
   type OrderStage,
 } from "@chatea/shared";
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
@@ -39,6 +39,7 @@ import {
   writeDropiConfig,
 } from "../orders/service.js";
 import { requireTenant } from "../plugins/tenant.js";
+import { advanceLead } from "../services/leads.js";
 
 const { integrations, dropiRoutes, orders, orderEvents, contacts, conversations, auditLog } =
   schema;
@@ -441,6 +442,25 @@ export async function orderRoutes(
             ...(p.cancel ? { stage: "cancelado" } : {}),
           })
           .where(eq(orders.id, o.id));
+        // Cancelado y sin otro pedido vivo: el lead queda perdido.
+        if (p.cancel && o.conversationId) {
+          const [other] = await tx
+            .select({ id: orders.id })
+            .from(orders)
+            .where(
+              and(
+                eq(orders.conversationId, o.conversationId),
+                sql`${orders.stage} <> 'cancelado'`,
+                sql`${orders.id} <> ${o.id}`,
+              ),
+            )
+            .limit(1);
+          if (!other)
+            await advanceLead(tx, o.conversationId, "perdido", {
+              force: true,
+              lostReason: "cancelo",
+            });
+        }
         await tx.insert(orderEvents).values({
           orderId: o.id,
           source: "humano",
