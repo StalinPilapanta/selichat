@@ -24,6 +24,15 @@ const settingsSchema = z.object({
     start: z.string().regex(/^\d{2}:\d{2}$/),
     end: z.string().regex(/^\d{2}:\d{2}$/),
   }),
+  /** Vacío = sin sitio web. */
+  websiteUrl: z
+    .string()
+    .trim()
+    .max(300)
+    .transform((v) => v || null)
+    .pipe(z.url({ protocol: /^https?$/ }).nullable())
+    .nullable()
+    .optional(),
 });
 
 const agentConfigSchema = z.object({

@@ -1265,7 +1265,13 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     const opts = (await h.call(o.cookie, "GET", "/api/integrations/dropi")).json().options;
     await h.call(o.cookie, "PUT", "/api/integrations/dropi", {
       country: "EC",
-      options: { ...opts, notices: { ...opts.notices, retiro: true } },
+      options: {
+        ...opts,
+        notices: {
+          ...opts.notices,
+          events: { ...opts.notices.events, retiro: { enabled: true, text: "", template: "" } },
+        },
+      },
     });
     mcp.status["9001"] = "PARA RETIRO EN AGENCIA SERVIENTREGA";
     await dropiSync?.();
@@ -1276,7 +1282,7 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     const [inAgency] = (await h.call(o.cookie, "GET", "/api/leads")).json();
     expect(inAgency).toMatchObject({ stage: "en_agencia", order: { dropiOrderId: "9001" } });
     const avisos = detail.events.filter((e: { message: string }) =>
-      e.message.startsWith("Aviso de llegada a la agencia"),
+      e.message.startsWith("Aviso «Llegó a la agencia»"),
     );
     expect(avisos).toHaveLength(1);
     const msgs = (
@@ -1288,6 +1294,40 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     // En la lista de pedidos se ve desde cuándo está en la agencia.
     const [listed] = (await h.call(o.cookie, "GET", "/api/orders?stage=en_oficina")).json();
     expect(listed.stageSince).toBeTruthy();
+
+    // Entregado con texto propio: variables reemplazadas, una sola vez.
+    const opts2 = (await h.call(o.cookie, "GET", "/api/integrations/dropi")).json().options;
+    expect(opts2.notices.events.retiro.enabled).toBe(true);
+    await h.call(o.cookie, "PUT", "/api/integrations/dropi", {
+      country: "EC",
+      options: {
+        ...opts2,
+        notices: {
+          ...opts2.notices,
+          events: {
+            ...opts2.notices.events,
+            entregado: {
+              enabled: true,
+              text: "¡Listo {nombre}! Guía {guia} entregada 🎉",
+              template: "",
+            },
+          },
+        },
+      },
+    });
+    mcp.status["9001"] = "ENTREGADO";
+    await dropiSync?.();
+    await dropiSync?.();
+    detail = (await h.call(o.cookie, "GET", `/api/orders/${order.id}`)).json();
+    expect(detail.stage).toBe("entregado");
+    expect(
+      detail.events.filter((e: { message: string }) => e.message.startsWith("Aviso «Entregado»")),
+    ).toHaveLength(1);
+    const after = JSON.stringify(
+      (await h.call(o.cookie, "GET", `/api/conversations/${order.conversationId}/messages`)).json(),
+    );
+    expect(after).toContain("Guía 1800 entregada");
+    expect(after).not.toContain("{guia}");
 
     // Eliminar el contacto: se va su conversación, el pedido se conserva.
     const conv = (

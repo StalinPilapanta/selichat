@@ -25,6 +25,7 @@ type Settings = {
   currency: string;
   timezone: string;
   messagingWindow: { start: string; end: string };
+  websiteUrl: string | null;
 };
 
 const COUNTRIES = [
@@ -111,6 +112,23 @@ export default function Page() {
               </option>
             ))}
           </select>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label" htmlFor="web">
+            Sitio web de la tienda
+          </label>
+          <input
+            id="web"
+            className="input"
+            type="url"
+            placeholder="https://mitienda.com"
+            value={s.websiteUrl ?? ""}
+            onChange={(e) => setS({ ...s, websiteUrl: e.target.value })}
+          />
+          <p className="mt-1 text-xs text-zinc-500">
+            Cuando un cliente escribe sin decir qué producto busca, la IA le muestra tus productos y
+            lo invita a ver el catálogo en este sitio.
+          </p>
         </div>
         <div className="sm:col-span-2">
           <label className="label" htmlFor="tz">

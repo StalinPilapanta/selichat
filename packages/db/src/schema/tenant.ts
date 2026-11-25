@@ -26,6 +26,8 @@ export const tenantSettings = pgTable("tenant_settings", {
     .$type<{ start: string; end: string }>()
     .notNull()
     .default({ start: "08:00", end: "22:00" }),
+  /** Sitio web de la tienda: la IA lo comparte cuando el cliente no sabe qué producto quiere. */
+  websiteUrl: text("website_url"),
   /** Branding: nombre, color (#RRGGBB) y logo de la tienda; null = el de Selichat. */
   brandName: text("brand_name"),
   brandColor: text("brand_color"),

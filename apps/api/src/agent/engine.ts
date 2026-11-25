@@ -65,6 +65,45 @@ export interface AgentPrompt {
   media: { kind: string; url: string; caption: string }[];
 }
 
+/** Primera línea útil de la descripción (beneficio en pocas palabras). */
+function shortDescription(text: string) {
+  const line = text
+    .split(/\n|(?<=[.!?])\s/)
+    .map((l) => l.replace(/[*_#>`]/g, "").trim())
+    .find((l) => l.length > 8);
+  return line ? (line.length > 110 ? `${line.slice(0, 107)}…` : line) : "";
+}
+
+/**
+ * Cliente que escribe sin palabra clave ni anuncio: la IA pregunta qué le interesa, muestra los
+ * productos disponibles (y el sitio web de la tienda) y al elegir sigue el flujo de ese producto.
+ */
+export function noProductPrompt(
+  tenantName: string,
+  catalog: { id: string; name: string; description: string; price: string; currency: string }[],
+  keywords: { productId: string; value: string }[],
+  websiteUrl: string | null,
+) {
+  const list = catalog
+    .map((p) => {
+      const kw = keywords.filter((k) => k.productId === p.id).map((k) => k.value);
+      const desc = shortDescription(p.description);
+      return `- id=${p.id} | ${p.name}${desc ? ` — ${desc}` : ""} | ${p.price} ${p.currency}${kw.length ? ` | palabras: ${kw.join(", ")}` : ""}`;
+    })
+    .join("\n");
+  return `## Cliente sin producto elegido (${tenantName})
+El cliente escribió sin decir qué producto busca (no usó una palabra clave ni vino de un anuncio).
+1. Saluda con calidez en un mensaje corto y pregúntale con qué producto le podemos ayudar o qué necesita resolver.
+2. Muéstrale los productos disponibles en una lista breve: un renglón por producto con su nombre y para qué sirve (sin precios ni ids, salvo que pregunte el precio).${websiteUrl ? `\n3. Invítalo a ver todo el catálogo en ${websiteUrl}.` : ""}
+- Si menciona un síntoma o necesidad, recomienda el producto que mejor encaje y explica por qué en una frase.
+- Apenas quede claro cuál producto le interesa, llama a select_product con su id y continúa con el flujo de venta de ese producto. No pidas datos de entrega antes de elegir producto.
+- Si ya escribió algo que coincide con un producto (nombre o palabra clave), llama a select_product sin volver a preguntar.
+- No inventes productos fuera de esta lista. Si no tenemos lo que busca, dilo con amabilidad y ofrece lo más cercano.
+
+Productos disponibles:
+${list || "(catálogo vacío)"}`;
+}
+
 /** Prompt del producto (o de catálogo general si aún no hay producto). null = producto no existe. */
 export async function loadAgentPrompt(
   tx: Tx,
@@ -72,32 +111,32 @@ export async function loadAgentPrompt(
 ): Promise<AgentPrompt | null> {
   const common = await activePrompt(tx, "common", null);
   if (!opts.productId) {
-    const catalog = await tx
-      .select({
-        id: products.id,
-        name: products.name,
-        price: products.price,
-        currency: products.currency,
-      })
-      .from(products)
-      .where(eq(products.status, "activo"))
-      .orderBy(asc(products.name))
-      .limit(50);
-    const keywords = await tx
-      .select({ productId: productTriggers.productId, value: productTriggers.value })
-      .from(productTriggers)
-      .where(eq(productTriggers.kind, "keyword"));
-    const list = catalog
-      .map((p) => {
-        const kw = keywords.filter((k) => k.productId === p.id).map((k) => k.value);
-        return `- id=${p.id} | ${p.name} | ${p.price} ${p.currency}${kw.length ? ` | palabras: ${kw.join(", ")}` : ""}`;
-      })
-      .join("\n");
+    const [catalog, keywords, [settings], master] = await Promise.all([
+      tx
+        .select({
+          id: products.id,
+          name: products.name,
+          description: products.description,
+          price: products.price,
+          currency: products.currency,
+        })
+        .from(products)
+        .where(eq(products.status, "activo"))
+        .orderBy(asc(products.name))
+        .limit(50),
+      tx
+        .select({ productId: productTriggers.productId, value: productTriggers.value })
+        .from(productTriggers)
+        .where(eq(productTriggers.kind, "keyword")),
+      tx.select({ websiteUrl: schema.tenantSettings.websiteUrl }).from(schema.tenantSettings),
+      activePrompt(tx, "master", null),
+    ]);
     return {
       text: [
         PLATFORM_PROMPT,
         common?.content ?? "",
-        `Tienda: ${opts.tenantName}. El cliente aún no eligió producto. Saluda, entiende qué busca y, cuando quede claro cuál producto le interesa, llama a select_product con su id. No inventes productos fuera de esta lista:\n${list || "(catálogo vacío)"}`,
+        master?.content ?? "",
+        noProductPrompt(opts.tenantName, catalog, keywords, settings?.websiteUrl ?? null),
       ]
         .filter((t) => t.trim())
         .join("\n\n---\n\n"),

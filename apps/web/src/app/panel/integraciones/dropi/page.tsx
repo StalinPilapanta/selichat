@@ -1,7 +1,18 @@
 "use client";
-import { DROPI_COUNTRIES, type DropiCountry, type DropiOptions } from "@chatea/shared";
+import {
+  DROPI_COUNTRIES,
+  type DropiCountry,
+  type DropiOptions,
+  dropiOptionsSchema,
+  NOTICE_INFO,
+  NOTICE_KINDS,
+  NOTICE_TEMPLATE_PARAMS,
+  NOTICE_VARIABLES,
+  type NoticeKind,
+  renderNotice,
+} from "@chatea/shared";
 import { Truck } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
 
@@ -17,23 +28,7 @@ type Info = {
   webhookUrl?: string | null;
 };
 
-const DEFAULTS: DropiOptions = {
-  autoUpload: true,
-  rateType: "CON RECAUDO",
-  initialStatus: "PENDIENTE CONFIRMACION",
-  risk: { enabled: false, minDeliveryRate: 50, minOrders: 2 },
-  duplicateDays: 3,
-  quoteBeforeUpload: true,
-  checkStock: true,
-  notices: {
-    retiro: false,
-    recordatorioDias: 2,
-    novedad: false,
-    plantillaRetiro: "",
-    plantillaNovedad: "",
-    idioma: "es",
-  },
-};
+const DEFAULTS: DropiOptions = dropiOptionsSchema.parse({});
 
 export default function DropiPage() {
   const [info, setInfo] = useState<Info | null>(null);
@@ -65,7 +60,8 @@ export default function DropiPage() {
         ...DEFAULTS,
         ...i.options,
         risk: { ...DEFAULTS.risk, ...i.options?.risk },
-        notices: { ...DEFAULTS.notices, ...i.options?.notices },
+        // El API ya devuelve los avisos en el formato nuevo (migra la configuración anterior).
+        notices: dropiOptionsSchema.shape.notices.parse(i.options?.notices ?? {}),
       });
     } catch (e) {
       setError(errorMessage(e));
@@ -408,88 +404,7 @@ export default function DropiPage() {
           )}
         </section>
 
-        <section className="card space-y-3">
-          <h2 className="font-medium">Avisos al cliente por WhatsApp</h2>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={options.notices.retiro}
-              onChange={(e) => setNotices({ retiro: e.target.checked })}
-            />
-            <span>
-              Avisar cuando el pedido llega a la agencia
-              <span className="block text-xs text-zinc-500">
-                Con la agencia, dirección, horario, guía y valor a pagar.
-              </span>
-            </span>
-          </label>
-          {options.notices.retiro && (
-            <label className="block text-sm">
-              <span className="label">Recordar si no lo retira en</span>
-              <select
-                className="input"
-                value={options.notices.recordatorioDias}
-                onChange={(e) => setNotices({ recordatorioDias: Number(e.target.value) })}
-              >
-                <option value={0}>No recordar</option>
-                {[1, 2, 3, 4, 5].map((d) => (
-                  <option key={d} value={d}>
-                    {d} día{d === 1 ? "" : "s"}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={options.notices.novedad}
-              onChange={(e) => setNotices({ novedad: e.target.checked })}
-            />
-            <span>
-              Avisar cuando la transportadora reporta una novedad
-              <span className="block text-xs text-zinc-500">
-                Le pide confirmar la dirección o cuándo puede recibirlo.
-              </span>
-            </span>
-          </label>
-          {(options.notices.retiro || options.notices.novedad) && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm">
-                <span className="label">Plantilla de retiro (más de 24 h)</span>
-                <input
-                  className="input font-mono text-xs"
-                  placeholder="seguimiento_recordatorio_en_oficina"
-                  value={options.notices.plantillaRetiro}
-                  onChange={(e) => setNotices({ plantillaRetiro: e.target.value })}
-                />
-                <span className="mt-1 block text-xs text-zinc-500">
-                  Variables: {"{{1}}"} nombre, {"{{2}}"} producto, {"{{3}}"} agencia, {"{{4}}"}{" "}
-                  ciudad.
-                </span>
-              </label>
-              <label className="block text-sm">
-                <span className="label">Plantilla de novedad (más de 24 h)</span>
-                <input
-                  className="input font-mono text-xs"
-                  placeholder="novedad_recordatorio"
-                  value={options.notices.plantillaNovedad}
-                  onChange={(e) => setNotices({ plantillaNovedad: e.target.value })}
-                />
-                <span className="mt-1 block text-xs text-zinc-500">
-                  Variable: {"{{1}}"} producto.
-                </span>
-              </label>
-            </div>
-          )}
-          <p className="text-xs text-zinc-500">
-            Dentro de las 24 h del último mensaje del cliente se envía texto; después solo la
-            plantilla aprobada (sin plantilla, queda anotado en el historial del pedido). Cada aviso
-            sale una sola vez por pedido.
-          </p>
-        </section>
+        <NoticesCard notices={options.notices} onChange={setNotices} />
 
         {mcp && (
           <section className="card space-y-1">
@@ -625,5 +540,259 @@ function AgencyFinder() {
       </div>
       <ErrorText>{error}</ErrorText>
     </section>
+  );
+}
+
+/** Ejemplo para la vista previa de los avisos. */
+const SAMPLE: Record<string, string> = {
+  nombre: "Ana",
+  producto: "Mega Red",
+  guia: "1800456789",
+  seguimiento: "https://www.servientrega.com.ec/Tracking/?guia=1800456789&tipo=GUIA",
+  transportadora: "Servientrega",
+  agencia: "la agencia Servientrega *AMBATO CENTRO*",
+  direccion_agencia: "Av. Cevallos y Montalvo",
+  horario: "Lunes a viernes 08:00 a 18:00 · sábados 09:00 a 13:00",
+  total: "$49.99",
+  ciudad: "Ambato",
+  estado: "no se encontró al destinatario",
+  tienda: "NatureVita",
+};
+
+type Notices = DropiOptions["notices"];
+
+/** Texto con el formato de WhatsApp: *negrita* y _cursiva_. */
+function WhatsAppText({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\*[^*\n]+\*|_[^_\n]+_)/g).map((part, i) =>
+        /^\*.+\*$/.test(part) ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: trozos fijos del mismo texto
+          <strong key={i}>{part.slice(1, -1)}</strong>
+        ) : /^_.+_$/.test(part) ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: trozos fijos del mismo texto
+          <em key={i}>{part.slice(1, -1)}</em>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+/** Agente logístico: avisos por estado del pedido, cada uno con texto editable y plantilla. */
+function NoticesCard({
+  notices,
+  onChange,
+}: {
+  notices: Notices;
+  onChange: (patch: Partial<Notices>) => void;
+}) {
+  const [open, setOpen] = useState<NoticeKind | null>(null);
+  const [templates, setTemplates] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const channels = await api<{ id: string }[]>("/api/channels");
+        const lists = await Promise.all(
+          channels.map((c) =>
+            api<{ name: string; status: string }[]>(`/api/channels/${c.id}/templates`).catch(
+              () => [],
+            ),
+          ),
+        );
+        const names = lists
+          .flat()
+          .filter((t) => t.status === "APPROVED")
+          .map((t) => t.name);
+        setTemplates([...new Set(names)].sort());
+      } catch {
+        setTemplates([]);
+      }
+    })();
+  }, []);
+  const setEvent = (k: NoticeKind, patch: Partial<Notices["events"][NoticeKind]>) =>
+    onChange({ events: { ...notices.events, [k]: { ...notices.events[k], ...patch } } });
+  const active = NOTICE_KINDS.filter((k) => notices.events[k].enabled).length;
+
+  return (
+    <section className="card space-y-3">
+      <div>
+        <h2 className="font-medium">Avisos al cliente por WhatsApp (agente logístico)</h2>
+        <p className="text-sm text-zinc-500">
+          Cuando cambia el estado del pedido en Dropi, Selichat le escribe al cliente. {active} de{" "}
+          {NOTICE_KINDS.length} avisos activos.
+        </p>
+      </div>
+      <ul className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+        {NOTICE_KINDS.map((k) => (
+          <NoticeRow
+            key={k}
+            kind={k}
+            ev={notices.events[k]}
+            open={open === k}
+            onToggle={() => setOpen(open === k ? null : k)}
+            onChange={(patch) => setEvent(k, patch)}
+            templates={templates}
+            extra={
+              k === "recordatorio" ? (
+                <label className="block text-sm">
+                  <span className="label">Recordar si no lo retira en</span>
+                  <select
+                    className="input"
+                    value={notices.recordatorioDias}
+                    onChange={(e) => onChange({ recordatorioDias: Number(e.target.value) })}
+                  >
+                    {[1, 2, 3, 4, 5, 7].map((d) => (
+                      <option key={d} value={d}>
+                        {d} día{d === 1 ? "" : "s"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null
+            }
+          />
+        ))}
+      </ul>
+      <label className="block text-sm">
+        <span className="label">Enlace de seguimiento de la guía</span>
+        <input
+          className="input font-mono text-xs"
+          value={notices.trackingUrl}
+          onChange={(e) => onChange({ trackingUrl: e.target.value })}
+          placeholder="https://…{guia}…"
+        />
+        <span className="mt-1 block text-xs text-zinc-500">
+          Se usa en la variable {"{seguimiento}"}; {"{guia}"} se reemplaza por el número de guía.
+          Vacío = no se comparte enlace.
+        </span>
+      </label>
+      <p className="text-xs text-zinc-500">
+        Se envían solo dentro del horario de la tienda (Configuración); fuera de horario quedan en
+        espera y salen al abrir. Dentro de las 24 h del último mensaje del cliente se envía el
+        texto; después, solo la plantilla aprobada (sin plantilla queda anotado en el historial del
+        pedido). Cada aviso sale una sola vez por pedido.
+      </p>
+    </section>
+  );
+}
+
+function NoticeRow({
+  kind,
+  ev,
+  open,
+  onToggle,
+  onChange,
+  templates,
+  extra,
+}: {
+  kind: NoticeKind;
+  ev: Notices["events"][NoticeKind];
+  open: boolean;
+  onToggle: () => void;
+  onChange: (patch: Partial<Notices["events"][NoticeKind]>) => void;
+  templates: string[];
+  extra: React.ReactNode;
+}) {
+  const info = NOTICE_INFO[kind];
+  const text = ev.text || info.defaultText;
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const insert = (key: string) => {
+    const el = ref.current;
+    const token = `{${key}}`;
+    if (!el) return onChange({ text: text + token });
+    const next = text.slice(0, el.selectionStart) + token + text.slice(el.selectionEnd);
+    onChange({ text: next });
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = el.selectionStart + token.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
+  return (
+    <li className="p-3">
+      <div className="flex items-center gap-3">
+        <input
+          type="checkbox"
+          aria-label={`Activar aviso ${info.label}`}
+          checked={ev.enabled}
+          onChange={(e) => onChange({ enabled: e.target.checked })}
+        />
+        <button type="button" onClick={onToggle} className="min-w-0 flex-1 text-left">
+          <span className="block text-sm font-medium">{info.label}</span>
+          <span className="block text-xs text-zinc-500">{info.when}</span>
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={onToggle}>
+          {open ? "Cerrar" : "Editar"}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <div className="space-y-2">
+            {extra}
+            <label className="block text-sm">
+              <span className="label">Mensaje (dentro de las 24 h)</span>
+              <textarea
+                ref={ref}
+                className="input min-h-36 text-sm"
+                value={text}
+                onChange={(e) => onChange({ text: e.target.value })}
+              />
+            </label>
+            <div className="flex flex-wrap gap-1">
+              {NOTICE_VARIABLES.map((v) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  title={v.label}
+                  className="rounded-full border border-zinc-200 px-2 py-0.5 font-mono text-[11px] hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  onClick={() => insert(v.key)}
+                >
+                  {`{${v.key}}`}
+                </button>
+              ))}
+            </div>
+            {ev.text && (
+              <button
+                type="button"
+                className="text-xs text-zinc-500 underline"
+                onClick={() => onChange({ text: "" })}
+              >
+                Volver al texto sugerido
+              </button>
+            )}
+            <label className="block text-sm">
+              <span className="label">Plantilla aprobada (más de 24 h)</span>
+              <input
+                className="input font-mono text-xs"
+                list={`tpl-${kind}`}
+                placeholder="nombre_de_la_plantilla"
+                value={ev.template}
+                onChange={(e) => onChange({ template: e.target.value })}
+              />
+              <datalist id={`tpl-${kind}`}>
+                {templates.map((t) => (
+                  <option key={t} value={t} />
+                ))}
+              </datalist>
+              <span className="mt-1 block text-xs text-zinc-500">
+                Variables en orden:{" "}
+                {NOTICE_TEMPLATE_PARAMS.map((p, i) => `{{${i + 1}}} ${p}`).join(", ")}. Se envían
+                tantas como pida la plantilla.
+              </span>
+            </label>
+          </div>
+          <div>
+            <span className="label">Vista previa</span>
+            <div className="chat-bg rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+              <div className="ml-auto max-w-[90%] rounded-2xl rounded-tr-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm whitespace-pre-wrap shadow-sm dark:border-brand-900 dark:bg-brand-950">
+                <WhatsAppText text={renderNotice(text, SAMPLE)} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }

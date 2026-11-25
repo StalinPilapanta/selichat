@@ -6,6 +6,7 @@ import { RealtimeBus } from "../realtime.js";
 import { runLeadHousekeeping } from "../services/leads.js";
 import { client, hasDb, testApp } from "../test-helpers.js";
 import { sign } from "../whatsapp/signature.js";
+import { noProductPrompt } from "./engine.js";
 import { dueStep, inSendingHours, runFollowUps } from "./followups.js";
 import { splitReply, toModelMessages } from "./format.js";
 import type { AgentScheduler } from "./scheduler.js";
@@ -35,6 +36,39 @@ describe("formato del agente", () => {
       },
       { role: "assistant", content: "(asesor humano) te ayudo" },
     ]);
+  });
+});
+
+describe("cliente sin producto elegido", () => {
+  const catalog = [
+    {
+      id: "p1",
+      name: "Mega Red",
+      description:
+        "**Omega 3 de krill** para el corazón y las articulaciones. Frasco de 60 cápsulas.",
+      price: "29.99",
+      currency: "USD",
+    },
+    { id: "p2", name: "Colágeno", description: "", price: "24.00", currency: "USD" },
+  ];
+  it("lista los productos con su beneficio, el sitio web y pide elegir con select_product", () => {
+    const p = noProductPrompt(
+      "NatureVita",
+      catalog,
+      [{ productId: "p1", value: "krill" }],
+      "https://naturevitaec.com",
+    );
+    expect(p).toContain("pregúntale con qué producto le podemos ayudar");
+    expect(p).toContain(
+      "id=p1 | Mega Red — Omega 3 de krill para el corazón y las articulaciones.",
+    );
+    expect(p).toContain("palabras: krill");
+    expect(p).toContain("id=p2 | Colágeno | 24.00 USD");
+    expect(p).toContain("https://naturevitaec.com");
+    expect(p).toContain("select_product");
+  });
+  it("sin sitio web no lo menciona", () => {
+    expect(noProductPrompt("NatureVita", catalog, [], null)).not.toContain("catálogo en");
   });
 });
 

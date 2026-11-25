@@ -1,123 +1,203 @@
 /**
- * Avisos al cliente por WhatsApp según el estado del pedido (como alertas.py del bot de ventas):
- * - «retiro»: el paquete llegó a la agencia u oficina de la transportadora;
- * - «recordatorio»: sigue en la agencia sin retirar después de N días (una sola vez);
- * - «novedad»: la transportadora reporta una novedad.
+ * Agente logístico: avisos por WhatsApp al cliente según el estado del pedido en Dropi
+ * (guía generada, en camino, llegó a la agencia, recordatorio de retiro, entregado, novedad).
  *
- * Dentro de las 24 h del último mensaje del cliente se envía texto; después, solo la plantilla
- * aprobada que la tienda configuró (si no hay, queda anotado en el historial del pedido).
- * Cada aviso se envía una sola vez por pedido (order_events.payload.aviso).
+ * - Texto editable por aviso con variables ({nombre}, {guia}, {agencia}…). Dentro de las 24 h
+ *   del último mensaje del cliente se envía ese texto; después, solo la plantilla aprobada (si no
+ *   hay, queda anotado en el historial del pedido).
+ * - Respeta el horario de envío de la tienda: fuera de horario no se envía al momento y la tarea
+ *   periódica lo manda cuando abre el horario (solo cambios de las últimas 72 h).
+ * - Cada aviso sale una sola vez por pedido (order_events.payload.aviso).
  */
 import { schema, withTenant } from "@chatea/db";
-import { agencyLabel, type OrderNotices, type OrderStage } from "@chatea/shared";
-import { and, desc, eq, sql } from "drizzle-orm";
+import {
+  agencyLabel,
+  NOTICE_INFO,
+  NOTICE_TEMPLATE_PARAMS,
+  type NoticeKind,
+  type OrderNotices,
+  type OrderStage,
+  renderNotice,
+} from "@chatea/shared";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { inSendingHours } from "../agent/followups.js";
 import { directorio } from "../carriers/agencias-geo.js";
 import type { RealtimeBus } from "../realtime.js";
 import { type SendInput, sendToConversation, type WaConfig } from "../whatsapp/service.js";
 import { type DropiDeps, loadDropi } from "./service.js";
 
-const { orders, orderEvents, conversations, contacts, dropiRoutes } = schema;
+const {
+  orders,
+  orderEvents,
+  conversations,
+  contacts,
+  dropiRoutes,
+  tenantSettings,
+  messageTemplates,
+  organization,
+} = schema;
 const WINDOW_MS = 24 * 3600_000;
+/** Solo se avisa de cambios recientes: al activar un aviso no se escribe a pedidos viejos. */
+const RECENT_MS = 72 * 3600_000;
 
 export interface NotifyDeps extends DropiDeps {
   wa: WaConfig;
   bus: RealtimeBus;
+  /** false en pruebas: no depender de la hora a la que corren. */
+  respectHours?: boolean;
 }
 
-type Aviso = "retiro" | "recordatorio" | "novedad";
 type OrderRow = typeof orders.$inferSelect;
 
-const LABEL: Record<Aviso, string> = {
-  retiro: "llegada a la agencia",
-  recordatorio: "recordatorio de retiro",
+/** Etapa del pedido → aviso que le corresponde. */
+const STAGE_NOTICE: Partial<Record<OrderStage, NoticeKind>> = {
+  guia_generada: "guia",
+  en_transito: "transito",
+  en_oficina: "retiro",
+  entregado: "entregado",
   novedad: "novedad",
 };
 
 const firstName = (n: string) => n.trim().split(/\s+/)[0] ?? "";
 
-/** Datos de la agencia (horario) desde el directorio, por el nombre registrado. */
+/** Agencia registrada (NOMBRE---SECTOR---DIRECCIÓN) con su horario del directorio. */
 function agencyInfo(registro: string | undefined) {
   if (!registro) return null;
   const [nombreRaw = "", , direccion = ""] = registro.split("---");
   const nombre = nombreRaw.trim().toUpperCase();
   const a = directorio().find((x) => x.nombre.toUpperCase() === nombre);
+  const sabados =
+    a?.finDeSemana && !/^(no|-|cerrado)/i.test(a.finDeSemana) ? ` · sábados ${a.finDeSemana}` : "";
   return {
-    nombre: a?.nombreCorto ?? nombre,
+    nombre: a ? `la agencia Servientrega *${a.nombreCorto}*` : agencyLabel(registro),
     ciudad: a?.ciudad ?? "",
     direccion: a?.direccion ?? direccion,
-    horario: a?.horario ?? "",
-    sabados: a?.finDeSemana ?? "",
+    horario: a?.horario ? `Lunes a viernes ${a.horario}${sabados}` : "",
   };
 }
 
-function message(aviso: Aviso, o: OrderRow, nombre: string, producto: string) {
+/** Valores de las variables del aviso para este pedido. */
+export function noticeVars(
+  o: OrderRow,
+  ctx: { nombre: string; tienda: string; trackingUrl: string },
+): Record<string, string> {
   const ag = agencyInfo(o.customer.agencia);
-  const pago =
-    o.rateType === "CON RECAUDO" ? ` y el valor a pagar: $${Number(o.total).toFixed(2)}` : "";
-  const guia = o.trackingCode ? `\n\nGuía: ${o.trackingCode}` : "";
-  const sabados =
-    ag?.sabados && !/^(no|-|cerrado)/i.test(ag.sabados) ? ` · sábados ${ag.sabados}` : "";
-  const donde = ag
-    ? `la agencia Servientrega *${ag.nombre}*${ag.ciudad ? ` (${ag.ciudad.toLowerCase()})` : ""}\n📍 ${ag.direccion}${ag.horario ? `\n🕒 Lunes a viernes ${ag.horario}${sabados}` : ""}`
-    : `la oficina de ${o.carrier || "la transportadora"}`;
-  const hola = `¡Hola${nombre ? ` ${nombre}` : ""}! 😊`;
-  if (aviso === "retiro")
-    return `${hola} Tu pedido de ${producto} ya llegó a ${donde}\n\nAcércate con tu cédula${pago}.${guia}`;
-  if (aviso === "recordatorio")
-    return `${hola} Te recordamos que tu pedido de ${producto} sigue esperándote en ${donde}\n\nRetíralo pronto para que no se devuelva 🙏${guia}`;
-  return `${hola} La transportadora nos reporta una novedad con tu pedido de ${producto}${o.dropiStatus ? ` (${o.dropiStatus.toLowerCase()})` : ""}. ¿Nos confirmas tu dirección o cuándo puedes recibirlo para reprogramar la entrega?${guia}`;
+  const carrier = o.carrier || (o.customer.agencia ? "Servientrega" : "");
+  const guia = o.trackingCode ?? "";
+  return {
+    nombre: ctx.nombre,
+    producto: o.items[0]?.name ?? "tu producto",
+    guia,
+    seguimiento:
+      ctx.trackingUrl && guia ? ctx.trackingUrl.replaceAll("{guia}", encodeURIComponent(guia)) : "",
+    transportadora: carrier,
+    agencia:
+      ag?.nombre ?? (carrier ? `la oficina de ${carrier}` : "la oficina de la transportadora"),
+    direccion_agencia: ag?.direccion ?? "",
+    horario: ag?.horario ?? "",
+    total: o.rateType === "CON RECAUDO" ? `$${Number(o.total).toFixed(2)}` : "",
+    ciudad: (ag?.ciudad || o.customer.ciudad || "").toString(),
+    estado: (o.dropiStatus ?? "").toLowerCase(),
+    tienda: ctx.tienda,
+  };
 }
 
-/** Envía el aviso si no se envió antes. Devuelve si se envió. */
+/** Cuántas variables ({{n}}) pide el cuerpo de la plantilla. */
+function templateVarCount(components: Record<string, unknown>[]) {
+  const body = components.find((c) => String(c.type).toUpperCase() === "BODY");
+  const text = typeof body?.text === "string" ? body.text : "";
+  return Math.max(0, ...[...text.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])));
+}
+
+type TenantCtx = { notices: OrderNotices; tienda: string; inHours: boolean };
+
+async function tenantCtx(deps: NotifyDeps, tenantId: string, now: Date): Promise<TenantCtx | null> {
+  const dropi = await loadDropi(deps, tenantId).catch(() => null);
+  const notices = dropi?.config.options.notices;
+  if (!notices || !Object.values(notices.events).some((e) => e.enabled)) return null;
+  const [s] = await withTenant(deps.db, tenantId, (tx) => tx.select().from(tenantSettings));
+  const [org] = await deps.db
+    .select({ name: organization.name })
+    .from(organization)
+    .where(eq(organization.id, tenantId));
+  const inHours =
+    deps.respectHours === false ||
+    inSendingHours(
+      s?.messagingWindow ?? { start: "08:00", end: "22:00" },
+      s?.timezone ?? "America/Guayaquil",
+      now,
+    );
+  return { notices, tienda: s?.brandName?.trim() || org?.name || "", inHours };
+}
+
+/** Envía un aviso si está activo y no se envió antes. Devuelve si se envió. */
 async function send(
   deps: NotifyDeps,
   tenantId: string,
   o: OrderRow,
-  aviso: Aviso,
-  notices: OrderNotices,
+  kind: NoticeKind,
+  ctx: TenantCtx,
 ): Promise<boolean> {
+  const ev = ctx.notices.events[kind];
   const convId = o.conversationId;
-  if (!convId) return false;
-  const ctx = await withTenant(deps.db, tenantId, async (tx) => {
+  if (!ev.enabled || !convId) return false;
+  const info = NOTICE_INFO[kind];
+  const pre = await withTenant(deps.db, tenantId, async (tx) => {
     const [done] = await tx
       .select({ id: orderEvents.id })
       .from(orderEvents)
-      .where(and(eq(orderEvents.orderId, o.id), sql`${orderEvents.payload}->>'aviso' = ${aviso}`))
+      .where(and(eq(orderEvents.orderId, o.id), sql`${orderEvents.payload}->>'aviso' = ${kind}`))
       .limit(1);
     if (done) return null;
     const [c] = await tx
-      .select({ lastInboundAt: conversations.lastInboundAt, name: contacts.name })
+      .select({
+        lastInboundAt: conversations.lastInboundAt,
+        channelId: conversations.channelId,
+        name: contacts.name,
+        profileName: contacts.profileName,
+      })
       .from(conversations)
       .innerJoin(contacts, eq(contacts.id, conversations.contactId))
       .where(eq(conversations.id, convId));
-    return c ?? null;
+    if (!c) return null;
+    const [tpl] = ev.template
+      ? await tx
+          .select({ language: messageTemplates.language, components: messageTemplates.components })
+          .from(messageTemplates)
+          .where(
+            and(
+              eq(messageTemplates.channelId, c.channelId),
+              eq(messageTemplates.name, ev.template),
+              eq(messageTemplates.status, "APPROVED"),
+            ),
+          )
+          .limit(1)
+      : [];
+    return { c, tpl };
   });
-  if (!ctx) return false;
+  if (!pre) return false;
 
-  const nombre = firstName(o.customer.nombre || ctx.name || "");
-  const producto = o.items[0]?.name ?? "tu producto";
-  const windowOpen = ctx.lastInboundAt && Date.now() - ctx.lastInboundAt.getTime() < WINDOW_MS;
-  const plantilla = aviso === "novedad" ? notices.plantillaNovedad : notices.plantillaRetiro;
-  const ag = agencyInfo(o.customer.agencia);
+  const vars = noticeVars(o, {
+    nombre: firstName(o.customer.nombre || pre.c.name || pre.c.profileName || ""),
+    tienda: ctx.tienda,
+    trackingUrl: ctx.notices.trackingUrl,
+  });
+  const windowOpen = pre.c.lastInboundAt && Date.now() - pre.c.lastInboundAt.getTime() < WINDOW_MS;
   let input: SendInput | null = null;
-  if (windowOpen) input = { kind: "text", body: message(aviso, o, nombre, producto) };
-  else if (plantilla)
+  if (windowOpen) {
+    const body = renderNotice(ev.text.trim() || info.defaultText, vars);
+    if (body) input = { kind: "text", body };
+  } else if (ev.template) {
+    // Plantilla sincronizada: tantas variables como pida; si no está, las 4 primeras.
+    const n = pre.tpl ? templateVarCount(pre.tpl.components) : 4;
     input = {
       kind: "template",
-      name: plantilla,
-      language: notices.idioma || "es",
-      // Parámetros como las plantillas del bot: retiro {nombre, producto, agencia, ciudad}.
-      params:
-        aviso === "novedad"
-          ? [producto]
-          : [
-              nombre || "cliente",
-              producto,
-              ag?.nombre ?? agencyLabel(o.customer.agencia),
-              ag?.ciudad || o.customer.ciudad,
-            ],
-      preview: `[plantilla ${plantilla}] ${LABEL[aviso]} · ${producto}`,
+      name: ev.template,
+      language: pre.tpl?.language || ctx.notices.idioma || "es",
+      params: NOTICE_TEMPLATE_PARAMS.slice(0, n).map((k) => vars[k] || "-"),
+      preview: `[plantilla ${ev.template}] ${info.label} · ${vars.producto}`,
     };
+  }
 
   if (!input) {
     await withTenant(deps.db, tenantId, (tx) =>
@@ -125,8 +205,8 @@ async function send(
         orderId: o.id,
         source: "sistema",
         stage: o.stage,
-        message: `No se avisó la ${LABEL[aviso]}: pasaron más de 24 h desde el último mensaje del cliente y no hay plantilla configurada.`,
-        payload: { aviso, enviado: false },
+        message: `No se envió el aviso «${info.label}»: pasaron más de 24 h desde el último mensaje del cliente y no hay plantilla configurada.`,
+        payload: { aviso: kind, enviado: false },
       }),
     );
     return false;
@@ -144,64 +224,83 @@ async function send(
       source: "sistema",
       stage: o.stage,
       message: ok
-        ? `Aviso de ${LABEL[aviso]} enviado por WhatsApp${toSend.kind === "template" ? " (plantilla)" : ""}.`
-        : `Falló el aviso de ${LABEL[aviso]} por WhatsApp.`,
-      payload: { aviso, enviado: ok },
+        ? `Aviso «${info.label}» enviado por WhatsApp${toSend.kind === "template" ? " (plantilla)" : ""}.`
+        : `Falló el aviso «${info.label}» por WhatsApp.`,
+      payload: { aviso: kind, enviado: ok },
     }),
   );
   return ok;
 }
 
-/** Al cambiar la etapa (webhook o consulta): avisa la llegada a la agencia o una novedad. */
+/** Desde cuándo está el pedido en su etapa actual (último evento de Dropi con esa etapa). */
+async function stageSince(deps: NotifyDeps, tenantId: string, o: OrderRow) {
+  const [e] = await withTenant(deps.db, tenantId, (tx) =>
+    tx
+      .select({ at: orderEvents.createdAt })
+      .from(orderEvents)
+      .where(
+        and(
+          eq(orderEvents.orderId, o.id),
+          eq(orderEvents.stage, o.stage),
+          eq(orderEvents.source, "dropi"),
+        ),
+      )
+      .orderBy(desc(orderEvents.createdAt))
+      .limit(1),
+  );
+  return e?.at ?? o.updatedAt;
+}
+
+/** Cambio de etapa (webhook o consulta): avisa al momento si está dentro del horario. */
 export async function notifyStage(
   deps: NotifyDeps,
   tenantId: string,
   orderId: string,
   stage: OrderStage,
 ) {
-  if (stage !== "en_oficina" && stage !== "novedad") return false;
-  const dropi = await loadDropi(deps, tenantId);
-  const notices = dropi?.config.options.notices;
-  if (!notices) return false;
-  if (stage === "en_oficina" ? !notices.retiro : !notices.novedad) return false;
+  const kind = STAGE_NOTICE[stage];
+  if (!kind) return false;
+  const ctx = await tenantCtx(deps, tenantId, new Date());
+  if (!ctx?.inHours) return false; // fuera de horario: lo envía la tarea periódica
   const [o] = await withTenant(deps.db, tenantId, (tx) =>
     tx.select().from(orders).where(eq(orders.id, orderId)),
   );
-  if (!o) return false;
-  return send(deps, tenantId, o, stage === "novedad" ? "novedad" : "retiro", notices);
+  return o ? send(deps, tenantId, o, kind, ctx) : false;
 }
 
-/** Pedidos que siguen en la agencia después de N días: un recordatorio por pedido. */
-export async function runPickupReminders(deps: NotifyDeps) {
+/**
+ * Tarea periódica: avisos pendientes (los que cayeron fuera de horario) y recordatorios de
+ * retiro cuando el pedido sigue en la agencia después de los días indicados.
+ */
+export async function runOrderNotices(deps: NotifyDeps, now = new Date()) {
   const tenants = await deps.db.select({ tenantId: dropiRoutes.tenantId }).from(dropiRoutes);
   let sent = 0;
   for (const { tenantId } of tenants) {
-    const dropi = await loadDropi(deps, tenantId).catch(() => null);
-    const notices = dropi?.config.options.notices;
-    if (!notices?.retiro || !notices.recordatorioDias) continue;
-    const cutoff = new Date(Date.now() - notices.recordatorioDias * 86400_000);
-    const due = await withTenant(deps.db, tenantId, async (tx) => {
-      const rows = await tx.select().from(orders).where(eq(orders.stage, "en_oficina")).limit(200);
-      const out: OrderRow[] = [];
-      for (const o of rows) {
-        // Desde cuándo está en la agencia: el último evento que la dejó en esa etapa.
-        const [since] = await tx
-          .select({ at: orderEvents.createdAt })
-          .from(orderEvents)
-          .where(
-            and(
-              eq(orderEvents.orderId, o.id),
-              eq(orderEvents.stage, "en_oficina"),
-              eq(orderEvents.source, "dropi"),
-            ),
-          )
-          .orderBy(desc(orderEvents.createdAt))
-          .limit(1);
-        if ((since?.at ?? o.updatedAt) <= cutoff) out.push(o);
-      }
-      return out;
-    });
-    for (const o of due) if (await send(deps, tenantId, o, "recordatorio", notices)) sent++;
+    const ctx = await tenantCtx(deps, tenantId, now);
+    if (!ctx?.inHours) continue;
+    const stages = Object.keys(STAGE_NOTICE) as OrderStage[];
+    const list = await withTenant(deps.db, tenantId, (tx) =>
+      tx
+        .select()
+        .from(orders)
+        .where(and(inArray(orders.stage, stages), isNotNull(orders.conversationId)))
+        .orderBy(desc(orders.updatedAt))
+        .limit(300),
+    );
+    for (const o of list) {
+      const kind = STAGE_NOTICE[o.stage as OrderStage];
+      if (!kind) continue;
+      const since = await stageSince(deps, tenantId, o);
+      const age = now.getTime() - since.getTime();
+      if (age <= RECENT_MS && (await send(deps, tenantId, o, kind, ctx))) sent++;
+      if (
+        kind === "retiro" &&
+        ctx.notices.events.recordatorio.enabled &&
+        age >= ctx.notices.recordatorioDias * 86400_000 &&
+        (await send(deps, tenantId, o, "recordatorio", ctx))
+      )
+        sent++;
+    }
   }
   return { sent };
 }

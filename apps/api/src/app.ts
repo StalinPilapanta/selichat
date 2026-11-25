@@ -14,7 +14,7 @@ import { createAuth } from "./auth.js";
 import { Geocoder } from "./carriers/agencias-geo.js";
 import type { Env } from "./env.js";
 import { createMailer } from "./mailer.js";
-import { notifyStage, runPickupReminders } from "./orders/notify.js";
+import { notifyStage, runOrderNotices } from "./orders/notify.js";
 import { type OnStage, syncDropiStatuses } from "./orders/service.js";
 import { RealtimeBus } from "./realtime.js";
 import { aiRoutes } from "./routes/ai.js";
@@ -101,14 +101,15 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
         geocoder,
       }
     : undefined;
-  // Avisos al cliente cuando el pedido llega a la agencia o tiene novedad.
+  // Agente logístico: avisos al cliente según el estado del pedido.
+  const notifyDeps = { db, ...dropi, wa, bus, respectHours: env.NODE_ENV !== "test" };
   const onStage: OnStage = (tenantId, orderId, stage) =>
-    notifyStage({ db, ...dropi, wa, bus }, tenantId, orderId, stage).catch((err) =>
+    notifyStage(notifyDeps, tenantId, orderId, stage).catch((err) =>
       app.log.error({ err, orderId }, "falló el aviso del pedido"),
     );
   const dropiPass = async () => {
     const { updated } = await syncDropiStatuses({ db, ...dropi }, 40, onStage);
-    const { sent } = await runPickupReminders({ db, ...dropi, wa, bus });
+    const { sent } = await runOrderNotices(notifyDeps);
     return { updated, reminders: sent };
   };
   const resolveModel = deps.resolveModel ?? createModelResolver(db, env.ENCRYPTION_KEY);

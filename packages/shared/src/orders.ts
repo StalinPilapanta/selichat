@@ -78,20 +78,191 @@ export const riskRulesSchema = z.object({
 });
 export type RiskRules = z.infer<typeof riskRulesSchema>;
 
-/** Avisos por WhatsApp al cliente cuando cambia el estado del pedido. */
-export const orderNoticesSchema = z.object({
-  /** Al llegar a la agencia/oficina de la transportadora. */
-  retiro: z.boolean().default(false),
-  /** Días en la agencia sin retirar para enviar un recordatorio (0 = no recordar). */
-  recordatorioDias: z.number().int().min(0).max(15).default(2),
-  /** Novedad de la transportadora (no lo encontraron, dirección errada…). */
-  novedad: z.boolean().default(false),
-  /** Plantillas aprobadas para cuando pasaron más de 24 h desde el último mensaje del cliente. */
-  plantillaRetiro: z.string().trim().max(120).default(""),
-  plantillaNovedad: z.string().trim().max(120).default(""),
-  idioma: z.string().trim().max(10).default("es"),
+/**
+ * Avisos por WhatsApp al cliente según el estado del pedido (agente logístico).
+ * Cada aviso tiene texto editable con variables y, para cuando pasaron más de 24 h desde el
+ * último mensaje del cliente, una plantilla aprobada de WhatsApp.
+ */
+export const NOTICE_KINDS = [
+  "guia",
+  "transito",
+  "retiro",
+  "recordatorio",
+  "entregado",
+  "novedad",
+] as const;
+export type NoticeKind = (typeof NOTICE_KINDS)[number];
+
+export const NOTICE_INFO: Record<
+  NoticeKind,
+  { label: string; when: string; stage: OrderStage; defaultText: string }
+> = {
+  guia: {
+    label: "Guía generada",
+    when: "Cuando Dropi genera la guía",
+    stage: "guia_generada",
+    defaultText:
+      "¡Hola {nombre}! 📦 Tu pedido de {producto} ya tiene guía: {guia} ({transportadora}).\nPuedes seguirlo aquí: {seguimiento}",
+  },
+  transito: {
+    label: "En camino",
+    when: "Cuando la transportadora lo despacha",
+    stage: "en_transito",
+    defaultText: "¡Hola {nombre}! 🚚 Tu pedido de {producto} ya va en camino. Guía: {guia}.",
+  },
+  retiro: {
+    label: "Llegó a la agencia",
+    when: "Cuando queda para retiro en la agencia u oficina",
+    stage: "en_oficina",
+    defaultText:
+      "¡Hola {nombre}! 😊 Tu pedido de {producto} ya llegó a {agencia}\n📍 {direccion_agencia}\n🕒 {horario}\n\nAcércate con tu cédula y el valor a pagar: {total}. Guía: {guia}",
+  },
+  recordatorio: {
+    label: "Recordatorio de retiro",
+    when: "Si sigue en la agencia sin retirar después de los días indicados",
+    stage: "en_oficina",
+    defaultText:
+      "¡Hola {nombre}! Te recordamos que tu pedido de {producto} sigue esperándote en {agencia}\n📍 {direccion_agencia}\n\nRetíralo pronto para que no se devuelva 🙏",
+  },
+  entregado: {
+    label: "Entregado",
+    when: "Cuando Dropi lo marca como entregado",
+    stage: "entregado",
+    defaultText:
+      "¡Hola {nombre}! 🎉 Ya recibiste tu {producto}. ¡Gracias por tu compra en {tienda}! Si tienes dudas sobre cómo usarlo, escríbenos por aquí.",
+  },
+  novedad: {
+    label: "Novedad",
+    when: "Cuando la transportadora reporta una novedad",
+    stage: "novedad",
+    defaultText:
+      "Hola {nombre}, la transportadora nos reporta una novedad con tu pedido de {producto} ({estado}). ¿Nos confirmas tu dirección o cuándo puedes recibirlo para reprogramar la entrega?",
+  },
+};
+
+/** Variables que se pueden usar en el texto de los avisos. */
+export const NOTICE_VARIABLES: { key: string; label: string }[] = [
+  { key: "nombre", label: "Nombre del cliente" },
+  { key: "producto", label: "Producto" },
+  { key: "guia", label: "Número de guía" },
+  { key: "seguimiento", label: "Enlace de seguimiento" },
+  { key: "transportadora", label: "Transportadora" },
+  { key: "agencia", label: "Agencia u oficina" },
+  { key: "direccion_agencia", label: "Dirección de la agencia" },
+  { key: "horario", label: "Horario de la agencia" },
+  { key: "total", label: "Valor a pagar" },
+  { key: "ciudad", label: "Ciudad" },
+  { key: "estado", label: "Estado en Dropi" },
+  { key: "tienda", label: "Nombre de la tienda" },
+];
+/**
+ * Orden de las variables de una plantilla de WhatsApp: {{1}} nombre, {{2}} producto,
+ * {{3}} guía, {{4}} agencia (o transportadora), {{5}} ciudad, {{6}} enlace de seguimiento.
+ * Se envían tantas como pida la plantilla.
+ */
+export const NOTICE_TEMPLATE_PARAMS = [
+  "nombre",
+  "producto",
+  "guia",
+  "agencia",
+  "ciudad",
+  "seguimiento",
+] as const;
+
+export const noticeEventSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Texto propio (vacío = el texto sugerido). */
+  text: z.string().max(1000).default(""),
+  /** Plantilla aprobada para cuando la ventana de 24 h está cerrada. */
+  template: z.string().trim().max(120).default(""),
 });
+export type NoticeEvent = z.infer<typeof noticeEventSchema>;
+
+const OFF: NoticeEvent = { enabled: false, text: "", template: "" };
+
+/** Convierte la configuración anterior (retiro/novedad/plantillas sueltas) a la nueva. */
+function migrateNotices(v: unknown) {
+  if (!v || typeof v !== "object" || "events" in v) return v;
+  const o = v as Record<string, unknown>;
+  const retiro = o.retiro === true;
+  const tRetiro = typeof o.plantillaRetiro === "string" ? o.plantillaRetiro : "";
+  const dias = Number(o.recordatorioDias ?? 2);
+  return {
+    // Antes 0 = «no recordar»; ahora el recordatorio tiene su propio interruptor.
+    recordatorioDias: dias >= 1 ? dias : 2,
+    idioma: o.idioma,
+    events: {
+      retiro: { enabled: retiro, text: "", template: tRetiro },
+      recordatorio: {
+        enabled: retiro && dias > 0,
+        text: "",
+        template: tRetiro,
+      },
+      novedad: {
+        enabled: o.novedad === true,
+        text: "",
+        template: typeof o.plantillaNovedad === "string" ? o.plantillaNovedad : "",
+      },
+    },
+  };
+}
+
+export const orderNoticesSchema = z.preprocess(
+  migrateNotices,
+  z.object({
+    events: z
+      .object({
+        guia: noticeEventSchema.default(OFF),
+        transito: noticeEventSchema.default(OFF),
+        retiro: noticeEventSchema.default(OFF),
+        recordatorio: noticeEventSchema.default(OFF),
+        entregado: noticeEventSchema.default(OFF),
+        novedad: noticeEventSchema.default(OFF),
+      })
+      .default({
+        guia: OFF,
+        transito: OFF,
+        retiro: OFF,
+        recordatorio: OFF,
+        entregado: OFF,
+        novedad: OFF,
+      }),
+    /** Días en la agencia sin retirar para el recordatorio. */
+    recordatorioDias: z.number().int().min(1).max(15).default(2),
+    idioma: z.string().trim().max(10).default("es"),
+    /**
+     * Enlace de seguimiento con {guia} (por defecto el de Servientrega Ecuador). Vacío = no se
+     * comparte enlace.
+     */
+    trackingUrl: z
+      .string()
+      .trim()
+      .max(300)
+      .default("https://www.servientrega.com.ec/Tracking/?guia={guia}&tipo=GUIA"),
+  }),
+);
 export type OrderNotices = z.infer<typeof orderNoticesSchema>;
+
+/** Variables como {nombre} → valor; las líneas que quedan vacías se quitan. */
+export function renderNotice(text: string, vars: Record<string, string>) {
+  return text
+    .split("\n")
+    .map((line) => {
+      let empty = false;
+      const out = line.replace(/\{([a-z_]+)\}/g, (m, k: string) => {
+        if (!(k in vars)) return m;
+        const v = (vars[k] ?? "").trim();
+        if (!v) empty = true;
+        return v;
+      });
+      // Línea que solo tenía una variable sin valor (p. ej. «📍 {direccion_agencia}»).
+      return empty && !/[\p{L}\p{N}]{3,}/u.test(out.replace(/^[^\p{L}\p{N}]+/u, "")) ? null : out;
+    })
+    .filter((l): l is string => l !== null)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 export const dropiOptionsSchema = z.object({
   /** Subir a Dropi apenas el cliente confirma con la IA. */
@@ -106,14 +277,7 @@ export const dropiOptionsSchema = z.object({
   quoteBeforeUpload: z.boolean().default(true),
   /** Revisar stock y costo de proveedor en Dropi antes de subir (MCP). */
   checkStock: z.boolean().default(true),
-  notices: orderNoticesSchema.default({
-    retiro: false,
-    recordatorioDias: 2,
-    novedad: false,
-    plantillaRetiro: "",
-    plantillaNovedad: "",
-    idioma: "es",
-  }),
+  notices: orderNoticesSchema.prefault({}),
 });
 export type DropiOptions = z.infer<typeof dropiOptionsSchema>;
 
