@@ -515,7 +515,8 @@ export async function createOrderFromConversation(
       telefono: (st.telefono ?? "").replace(/\D/g, "") || row.contact.phone,
       provincia: st.provincia ?? "",
       ciudad: st.ciudad ?? "",
-      direccion: st.direccion ?? "",
+      // Retiro en agencia: la dirección del pedido es la de la agencia (formato de guía).
+      direccion: st.direccion?.trim() || st.agencia?.trim() || "",
       referencia: st.referencia ?? "",
       ...(st.agencia ? { agencia: st.agencia } : {}),
     };
@@ -541,10 +542,24 @@ export async function createOrderFromConversation(
         items,
         total: total.toFixed(2),
         currency: product.currency || settings?.currency || "USD",
-        notes: [st.cantidad && `Oferta: ${st.cantidad}`, st.notas].filter(Boolean).join(" · "),
+        notes: [
+          st.agencia && `RETIRO EN AGENCIA: ${st.agencia.split("---")[0]}`,
+          st.cantidad && `Oferta: ${st.cantidad}`,
+          st.notas,
+        ]
+          .filter(Boolean)
+          .join(" · "),
       })
       .returning();
     if (!order) throw new OrderError("No se pudo crear el pedido.");
+    // Con pedido la venta está cerrada: no más recordatorios de venta para esta conversación.
+    if (st.etapa !== "confirmado")
+      await tx
+        .update(conversations)
+        .set({
+          checkoutState: sql`coalesce(${conversations.checkoutState}, '{}'::jsonb) || '{"etapa":"confirmado"}'::jsonb`,
+        })
+        .where(eq(conversations.id, conversationId));
     await tx.insert(orderEvents).values({
       orderId: order.id,
       source: opts.source,

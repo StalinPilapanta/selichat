@@ -510,6 +510,9 @@ export async function orderRoutes(
             stage: orders.stage,
             dropiOrderId: orders.dropiOrderId,
             uploadError: orders.uploadError,
+            items: orders.items,
+            total: orders.total,
+            currency: orders.currency,
           })
           .from(orders)
           .where(eq(orders.conversationId, req.params.id))

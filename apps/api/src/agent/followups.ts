@@ -114,6 +114,8 @@ async function runTenant(deps: FollowUpDeps, tenantId: string, now: Date): Promi
           isNotNull(conversations.lastInboundAt),
           // Le respondimos después de su último mensaje y no volvió a escribir.
           sql`${conversations.lastMessageAt} > ${conversations.lastInboundAt}`,
+          // Ya compró: con un pedido vivo no se le insiste más.
+          sql`not exists (select 1 from orders o where o.conversation_id = ${conversations.id} and o.stage <> 'cancelado')`,
           // Aún hay pasos por enviar (filtro grueso; el fino es en JS).
           sql`${conversations.followUpsSent} < jsonb_array_length(${products.followUps}->'reminders')`,
         ),

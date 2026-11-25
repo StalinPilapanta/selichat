@@ -127,6 +127,7 @@ export function Details({
           state={conv.checkoutState ?? {}}
           conversationId={conv.id}
           contactPhone={conv.contact.phone}
+          productName={conv.productName}
         />
         <button
           type="button"
@@ -427,16 +428,21 @@ type LinkedOrder = {
   stage: OrderStage;
   dropiOrderId: string | null;
   uploadError: string | null;
+  items: { name: string; quantity: number; variant?: string }[];
+  total: string;
+  currency: string;
 };
 
 function OrderData({
   state,
   conversationId,
   contactPhone,
+  productName,
 }: {
   state: Record<string, string>;
   conversationId: string;
   contactPhone: string;
+  productName: string | null;
 }) {
   const fields = (Object.keys(CHECKOUT_FIELDS) as CheckoutField[]).filter((k) => state[k]?.trim());
   const [order, setOrder] = useState<LinkedOrder | null>(null);
@@ -475,6 +481,28 @@ function OrderData({
           {STAGE_LABEL[state.etapa ?? "descubrimiento"] ?? state.etapa}
         </span>
       </div>
+      {(order?.items.length || productName) && (
+        <div className="mt-2 rounded-md bg-zinc-50 px-2 py-1.5 text-xs dark:bg-zinc-800/60">
+          <span className="text-zinc-500">Producto: </span>
+          {order?.items.length && order.stage !== "cancelado" ? (
+            <>
+              {order.items
+                .map((i) => `${i.quantity}× ${i.name}${i.variant ? ` (${i.variant})` : ""}`)
+                .join(", ")}
+              <span className="font-medium">
+                {" "}
+                · {order.currency === "USD" ? "$" : `${order.currency} `}
+                {Number(order.total).toFixed(2)}
+              </span>
+            </>
+          ) : (
+            <>
+              {productName}
+              {state.cantidad ? ` · ${state.cantidad}` : ""}
+            </>
+          )}
+        </div>
+      )}
       {fields.length ? (
         <dl className="mt-2 space-y-1 text-xs">
           {fields.map((k) => (

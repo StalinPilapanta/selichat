@@ -235,9 +235,26 @@ async function salesTurn(
     let turn: Awaited<ReturnType<typeof runAgentTurn>>;
     const calls: { name: string; input: unknown }[] = [];
     try {
+      // Posventa: la IA responde con el estado real del pedido (agencia, guía…).
+      const [order] = await withTenant(db, tenantId, (tx) =>
+        tx
+          .select({
+            stage: schema.orders.stage,
+            dropiOrderId: schema.orders.dropiOrderId,
+            trackingCode: schema.orders.trackingCode,
+            carrier: schema.orders.carrier,
+            total: schema.orders.total,
+            currency: schema.orders.currency,
+          })
+          .from(schema.orders)
+          .where(eq(schema.orders.conversationId, conversationId))
+          .orderBy(desc(schema.orders.createdAt))
+          .limit(1),
+      );
       turn = await runAgentTurn({
         resolved,
         prompt,
+        order: order ?? null,
         agencyOnly: mode === "solo",
         hasProduct: Boolean(conv.productId),
         checkout: (conv.checkoutState ?? {}) as CheckoutState,

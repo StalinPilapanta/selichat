@@ -145,12 +145,15 @@ export function splitName(full: string): { nombre: string; apellido: string } {
   return { nombre: parts.slice(0, half).join(" "), apellido: parts.slice(half).join(" ") };
 }
 
-/** Teléfono en formato nacional, como lo espera Dropi (EC: 0991234567). */
+/**
+ * Teléfono nacional como lo guarda Dropi: sin indicativo ni 0 inicial (EC: 991234567). Así
+ * coinciden la huella, los duplicados y lo que envía el bot de ventas.
+ */
 export function nationalPhone(phone: string, country: DropiCountry): string {
   const c = DROPI_COUNTRIES[country];
   let d = phone.replace(/\D/g, "");
   if (d.startsWith(c.dial) && d.length > c.dial.length + 6) d = d.slice(c.dial.length);
-  if (c.trunk && !d.startsWith(c.trunk) && d.length <= 9) d = c.trunk + d;
+  if (c.trunk && d.startsWith(c.trunk) && d.length > 8) d = d.slice(c.trunk.length);
   return d;
 }
 

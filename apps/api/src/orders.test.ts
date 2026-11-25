@@ -55,8 +55,8 @@ describe("pedidos: reglas", () => {
       apellido: "Pérez Gómez",
     });
     expect(splitName("Ana")).toEqual({ nombre: "Ana", apellido: "" });
-    expect(nationalPhone("593991112233", "EC")).toBe("0991112233");
-    expect(nationalPhone("0991112233", "EC")).toBe("0991112233");
+    expect(nationalPhone("593991112233", "EC")).toBe("991112233");
+    expect(nationalPhone("0991112233", "EC")).toBe("991112233"); // como lo guarda Dropi
     expect(nationalPhone("573001112233", "CO")).toBe("3001112233");
   });
 
@@ -345,6 +345,10 @@ describe("pedidos: reglas", () => {
       },
     });
     expect(system).toContain("ENTREGA EN AGENCIA SERVIENTREGA");
+    // Flujo completo hasta el cierre, y en la posventa no se deriva ni se vuelve a vender.
+    expect(system).toContain("Resumen");
+    expect(system).toContain("Después de confirmar");
+    expect(system).toContain("eso lo ve logística");
     expect(JSON.stringify(results[1])).toContain("agencia"); // primer confirm: falta la agencia
     expect(turn.calls.map((c) => c.name)).toEqual(steps.map((s) => s[0]));
     expect(turn.state).toMatchObject({
@@ -1008,7 +1012,7 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
       surname: "Pérez",
       state: "PICHINCHA",
       city: "QUITO",
-      phone: "0991112233",
+      phone: "991112233",
       rate_type: "CON RECAUDO",
       status: "PENDIENTE CONFIRMACION",
       products: [{ id: 777, quantity: 2 }],
@@ -1207,7 +1211,7 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
       surname: "Pérez",
       state: "PICHINCHA",
       city: "QUITO",
-      phone: "0991112233",
+      phone: "991112233",
       rate_type: "CON RECAUDO",
       products: [{ id: 777, price: 25, quantity: 2 }],
     });

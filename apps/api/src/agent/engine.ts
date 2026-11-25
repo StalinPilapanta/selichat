@@ -12,6 +12,8 @@ import {
   composePrompt,
   describeCheckout,
   missingCheckoutFields,
+  ORDER_STAGES,
+  type OrderStage,
   PLATFORM_PROMPT,
 } from "@chatea/shared";
 import { generateText, type ModelMessage, stepCountIs, tool } from "ai";
@@ -31,6 +33,27 @@ export const TOOLS_PROMPT = `Herramientas:
 - send_media: envía una imagen, video o audio del producto por su número de recurso cuando ayude a vender (no repitas uno ya enviado).
 - handoff_to_human: si el cliente pide hablar con una persona, está molesto, hace un reclamo, o pregunta algo que no está en tus instrucciones.
 Responde SIEMPRE con texto para el cliente después de usar herramientas. Separa ideas distintas con una línea en blanco: cada párrafo se envía como un mensaje aparte (máximo 3).`;
+
+/**
+ * Flujo de venta de inicio a fin (capa de plataforma, vale para todos los productos).
+ * El guion del producto da el tono y los argumentos; esto asegura que la venta se cierre
+ * con todos los datos y que después de confirmar no se vuelva a vender ni se derive.
+ */
+export function salesFlowPrompt(agencyOnly: boolean, agencies: boolean) {
+  const entrega = agencyOnly
+    ? "ciudad y la agencia Servientrega donde retira (con find_agencies y choose_agency; no hay entrega a domicilio)"
+    : agencies
+      ? "ciudad y, según prefiera, dirección de entrega con una referencia o la agencia Servientrega donde retira"
+      : "ciudad y dirección de entrega con una referencia";
+  return `Flujo de la venta (síguelo en orden; la "Etapa" del contexto dice dónde vas):
+1. Descubrimiento: saluda, entiende para quién es y qué necesita. Una pregunta a la vez.
+2. Oferta: conecta beneficios con su necesidad y ofrece las opciones del catálogo (recomienda una). Resuelve objeciones con lo que dicen tus instrucciones.
+3. Datos: cuando quiera comprar, pide solo lo que falte (mira "Faltan para confirmar"), máximo dos datos por mensaje: nombre y apellido, ${entrega}, y la cantidad u oferta. Registra cada dato apenas lo dé.
+4. Resumen: con todo registrado, envía un resumen corto: producto, cantidad/oferta, total, nombre, ciudad, ${agencyOnly ? "agencia" : "dirección o agencia"} y pago contra entrega. Pregunta "¿Confirmamos tu pedido?".
+5. Confirmación: cuando acepte, llama confirm_order y cierra: pedido registrado, ${agencyOnly ? "agencia donde retira (nombre, dirección y horario)" : "dónde lo recibe"}, que pagará al recibir y que le enviaremos la guía y le avisaremos cuando llegue. No inventes tiempos de entrega que no estén en tus instrucciones.
+6. Después de confirmar (Etapa confirmado): la venta ya está hecha. No vuelvas a ofrecer ni a pedir datos. Responde sus dudas con el "Estado del pedido" del contexto (agencia, guía, estado). Si quiere cambiar un dato y el pedido aún no está en Dropi, corrígelo con update_order_data; si ya está en Dropi, pásalo a un asesor con handoff_to_human.
+Tú gestionas la entrega y la agencia con tus herramientas: nunca respondas "eso lo ve logística" ni derives algo que puedes resolver con los datos que tienes.`;
+}
 
 export const CONFIRMED_LABEL = "pedido_confirmado";
 
@@ -155,6 +178,15 @@ const CITY_PROMPT = `- check_city: apenas el cliente diga su ciudad, verifícala
 
 export interface TurnInput {
   resolved: ResolvedModel;
+  /** Pedido de la conversación (para responder en la posventa). */
+  order?: {
+    stage: string;
+    dropiOrderId: string | null;
+    trackingCode: string | null;
+    carrier: string | null;
+    total: string;
+    currency: string;
+  } | null;
   /** La tienda solo envía a agencia: la agencia reemplaza a la dirección (obligatoria). */
   agencyOnly?: boolean;
   prompt: AgentPrompt;
@@ -196,7 +228,14 @@ export async function runAgentTurn(t: TurnInput): Promise<TurnResult> {
     findAgencies && (rules.agencyOnly ? AGENCY_PROMPT_SOLO : AGENCY_PROMPT_OPCION);
   const stableSystem = [
     t.prompt.text,
-    [TOOLS_PROMPT, checkCity && CITY_PROMPT, agencyPrompt].filter(Boolean).join("\n"),
+    [
+      TOOLS_PROMPT,
+      salesFlowPrompt(rules.agencyOnly, Boolean(findAgencies)),
+      checkCity && CITY_PROMPT,
+      agencyPrompt,
+    ]
+      .filter(Boolean)
+      .join("\n"),
     mediaList ? `Recursos disponibles para send_media:\n${mediaList}` : "",
   ]
     .filter(Boolean)
@@ -205,7 +244,11 @@ export async function runAgentTurn(t: TurnInput): Promise<TurnResult> {
 - Fecha y hora local: ${now}
 - Nombre de WhatsApp del cliente: ${t.context.customerName}
 - Teléfono del cliente: ${t.context.phone}
-${describeCheckout(t.checkout, rules)}`;
+${describeCheckout(t.checkout, rules)}${
+  t.order
+    ? `\nEstado del pedido: ${ORDER_STAGES[t.order.stage as OrderStage] ?? t.order.stage}${t.order.dropiOrderId ? ` · Dropi #${t.order.dropiOrderId}` : ""}${t.order.trackingCode ? ` · guía ${t.order.trackingCode}` : ""}${t.order.carrier ? ` · ${t.order.carrier}` : ""} · total ${t.order.total} ${t.order.currency}`
+    : ""
+}`;
 
   const outbox: SendInput[] = [];
   const calls: { name: string; input: unknown }[] = [];
