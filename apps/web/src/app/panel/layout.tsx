@@ -9,6 +9,7 @@ import {
   useSession,
 } from "@/lib/auth-client";
 import { BrandingProvider } from "@/lib/branding";
+import { OrderNotifier } from "@/lib/order-alerts";
 
 export default function PanelLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -69,6 +70,7 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
           router.replace("/entrar");
         }}
       >
+        <OrderNotifier tenantId={active.id} />
         {children}
       </AppShell>
     </BrandingProvider>

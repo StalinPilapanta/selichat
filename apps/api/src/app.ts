@@ -19,6 +19,7 @@ import { type OnStage, syncDropiStatuses } from "./orders/service.js";
 import { RealtimeBus } from "./realtime.js";
 import { aiRoutes } from "./routes/ai.js";
 import { authRoutes } from "./routes/auth.js";
+import { dashboardRoutes } from "./routes/dashboard.js";
 import { type ImportDeps, importRoutes } from "./routes/import.js";
 import { inboxRoutes } from "./routes/inbox.js";
 import { leadRoutes } from "./routes/leads.js";
@@ -192,6 +193,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
   });
   await app.register(inboxRoutes, { auth, db, bus, wa, uploadDir: env.UPLOAD_DIR });
   await app.register(leadRoutes, { auth, db, bus });
+  await app.register(dashboardRoutes, { auth, db });
   await app.register(uploadRoutes, {
     auth,
     db,

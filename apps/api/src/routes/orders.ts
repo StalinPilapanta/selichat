@@ -26,6 +26,7 @@ import { authorizeUrl, exchangeCode, pkce, registerClient } from "../dropi/mcp.j
 import {
   applyDropiWebhook,
   buyerHistory,
+  createManualOrder,
   createOrderFromConversation,
   type DropiConfig,
   type DropiDeps,
@@ -75,6 +76,34 @@ const orderPatch = z.object({
   notes: z.string().max(1000).optional(),
   rateType: z.enum(["CON RECAUDO", "SIN RECAUDO"]).optional(),
   cancel: z.boolean().optional(),
+});
+
+const manualOrder = z.object({
+  customer: z.object({
+    nombre: z.string().trim().min(1, "Falta el nombre").max(120),
+    apellido: z.string().trim().max(120).default(""),
+    telefono: z.string().trim().min(7, "Falta el teléfono").max(30),
+    provincia: z.string().trim().max(80).default(""),
+    ciudad: z.string().trim().min(2, "Falta la ciudad").max(80),
+    direccion: z.string().trim().min(3, "Falta la dirección").max(300),
+    referencia: z.string().trim().max(300).default(""),
+    email: z.string().trim().max(120).optional(),
+  }),
+  items: z
+    .array(
+      z.object({
+        productId: z.uuid(),
+        quantity: z.number().int().min(1).max(99),
+        variant: z.string().trim().max(120).optional(),
+      }),
+    )
+    .min(1, "Agrega al menos un producto")
+    .max(10),
+  total: z.number().positive().max(100_000).optional(),
+  rateType: z.enum(["CON RECAUDO", "SIN RECAUDO"]).default("CON RECAUDO"),
+  notes: z.string().trim().max(1000).default(""),
+  /** Subirlo a Dropi apenas se guarda. */
+  upload: z.boolean().default(false),
 });
 
 export async function orderRoutes(
@@ -386,6 +415,48 @@ export async function orderRoutes(
       );
     },
   );
+
+  /** Pedido ingresado a mano (llamada, local, otra red social). */
+  app.post("/api/orders", { preHandler: anyMember }, async (req, reply) => {
+    const body = manualOrder.safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({
+        error: "datos_invalidos",
+        detail: body.error.issues[0]?.message,
+        issues: body.error.issues,
+      });
+    const { upload, ...input } = body.data;
+    try {
+      const order = await createManualOrder(db, req.ctx.tenantId, input);
+      const result = upload
+        ? await uploadOrder(deps, req.ctx.tenantId, order.id, { actor: "humano" })
+        : null;
+      return reply.code(201).send({ result, order: await loadOrder(req.ctx.tenantId, order.id) });
+    } catch (e) {
+      if (e instanceof OrderError)
+        return reply.code(409).send({ error: "no_se_puede", message: e.message });
+      throw e;
+    }
+  });
+
+  /** Último pedido creado: el panel lo consulta para avisar en el escritorio. */
+  app.get("/api/orders/latest", { preHandler: anyMember }, async (req) => {
+    const [o] = await withTenant(db, req.ctx.tenantId, (tx) =>
+      tx
+        .select({
+          id: orders.id,
+          customer: orders.customer,
+          total: orders.total,
+          currency: orders.currency,
+          source: orders.source,
+          createdAt: orders.createdAt,
+        })
+        .from(orders)
+        .orderBy(desc(orders.createdAt))
+        .limit(1),
+    );
+    return { order: o ?? null };
+  });
 
   const loadOrder = (tenantId: string, id: string) =>
     withTenant(db, tenantId, async (tx) => {

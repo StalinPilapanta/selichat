@@ -1139,6 +1139,82 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     expect(up.order.stage).toBe("por_confirmar");
   });
 
+  it("pedido ingresado a mano: oferta del catálogo, sube a Dropi y aparece en el Inicio", async () => {
+    history = [];
+    const s = await store(
+      "manual",
+      { autoUpload: false },
+      {
+        name: "Omega 3",
+        price: "20.00",
+        currency: "USD",
+        dropiProductId: "999",
+        offers: [{ quantity: 2, totalPrice: "35.00", label: "2 frascos" }],
+        triggers: [{ kind: "keyword", value: "omega" }],
+      },
+    );
+    const [product] = (await h.call(s.cookie, "GET", "/api/products")).json();
+    const customer = {
+      nombre: "Ana",
+      apellido: "Ruiz",
+      telefono: "0998887766",
+      provincia: "Pichincha",
+      ciudad: "Quito",
+      direccion: "Av. Amazonas 123",
+    };
+
+    // Datos incompletos: se explica qué falta.
+    const bad = await h.call(s.cookie, "POST", "/api/orders", {
+      customer: { ...customer, direccion: "" },
+      items: [{ productId: product.id, quantity: 1 }],
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().detail).toBe("Falta la dirección");
+
+    // Sin subir: queda por subir con el precio de la oferta por 2.
+    const local = await h.call(s.cookie, "POST", "/api/orders", {
+      customer,
+      items: [{ productId: product.id, quantity: 2 }],
+    });
+    expect(local.statusCode, local.body).toBe(201);
+    expect(local.json().result).toBeNull();
+    expect(local.json().order).toMatchObject({
+      stage: "pendiente_subida",
+      source: "humano",
+      total: "35.00",
+      conversationId: null,
+      contactPhone: "593998887766",
+    });
+    expect(local.json().order.customer.telefono).toBe("998887766");
+
+    // Con total escrito a mano y subida inmediata.
+    const before = dropiOrders.length;
+    const up = await h.call(s.cookie, "POST", "/api/orders", {
+      customer,
+      items: [{ productId: product.id, quantity: 1 }],
+      total: 18.5,
+      upload: true,
+    });
+    expect(up.statusCode, up.body).toBe(201);
+    expect(up.json().result.status).toBe("subido");
+    expect(up.json().order).toMatchObject({ stage: "por_confirmar", total: "18.50" });
+    expect(dropiOrders).toHaveLength(before + 1);
+    expect(dropiOrders.at(-1)).toMatchObject({ city: "QUITO", surname: "Ruiz" });
+
+    // Último pedido para el aviso de escritorio.
+    const latest = (await h.call(s.cookie, "GET", "/api/orders/latest")).json();
+    expect(latest.order.id).toBe(up.json().order.id);
+
+    // El Inicio los cuenta y marca lo que ya está configurado.
+    const d = (await h.call(s.cookie, "GET", "/api/dashboard")).json();
+    expect(d.today.orders).toBe(2);
+    expect(d.today.amount).toBeCloseTo(53.5);
+    expect(d.stages.pendiente_subida).toEqual({ count: 1, amount: 35 });
+    expect(d.attention.toUpload).toBe(1);
+    expect(d.recent).toHaveLength(2);
+    expect(d.setup).toMatchObject({ whatsapp: true, products: true, dropi: true, team: false });
+  });
+
   it("conecta con la cuenta de Dropi (MCP): OAuth, subida, huella global y estados", async () => {
     const o = await h.owner("mcp");
     const start = await h.call(o.cookie, "POST", "/api/integrations/dropi/oauth/start", {

@@ -5,6 +5,7 @@
 import { type Database, schema, withTenant } from "@chatea/db";
 import {
   type CheckoutState,
+  DROPI_COUNTRIES,
   type DropiCountry,
   type DropiOptions,
   decryptSecret,
@@ -29,7 +30,7 @@ import {
   type DropiOrderSummary,
 } from "../dropi/client.js";
 import { DropiMcpClient, type McpTokens } from "../dropi/mcp.js";
-import { loadProduct } from "../services/catalog.js";
+import { type FullProduct, loadProduct } from "../services/catalog.js";
 import { advanceLead, syncLeadFromOrder } from "../services/leads.js";
 
 const {
@@ -477,6 +478,21 @@ const ORDER_OPEN: OrderStage[] = [
   "novedad",
 ];
 
+/**
+ * Precio de una línea: la oferta por esa cantidad si existe; si no, el precio de la
+ * variante (o del producto) por la cantidad.
+ */
+export function priceLine(product: FullProduct, quantity: number, variantName?: string) {
+  const offer = product.offers.find((o) => o.quantity === quantity);
+  const wanted = normPlace(variantName ?? "");
+  const variant = wanted
+    ? (product.variants.find((v) => normPlace(v.name) === wanted) ??
+      product.variants.find((v) => normPlace(v.name).includes(wanted)))
+    : undefined;
+  const unit = Number(variant?.price ?? product.price);
+  return { total: offer ? Number(offer.totalPrice) : unit * quantity, variant };
+}
+
 /** Crea (o devuelve el ya existente) pedido de una conversación con su checkout. */
 export async function createOrderFromConversation(
   db: Database,
@@ -503,14 +519,7 @@ export async function createOrderFromConversation(
     const [settings] = await tx.select().from(tenantSettings);
 
     const quantity = parseQuantity(st.cantidad);
-    const offer = product.offers.find((o) => o.quantity === quantity);
-    const wanted = normPlace(st.variante ?? "");
-    const variant = wanted
-      ? (product.variants.find((v) => normPlace(v.name) === wanted) ??
-        product.variants.find((v) => normPlace(v.name).includes(wanted)))
-      : undefined;
-    const unit = Number(variant?.price ?? product.price);
-    const total = offer ? Number(offer.totalPrice) : unit * quantity;
+    const { total, variant } = priceLine(product, quantity, st.variante);
     const customer: OrderCustomer = {
       ...splitName(st.nombre ?? row.contact.name ?? row.contact.profileName ?? ""),
       telefono: (st.telefono ?? "").replace(/\D/g, "") || row.contact.phone,
@@ -573,6 +582,91 @@ export async function createOrderFromConversation(
           : "Pedido creado por un asesor.",
     });
     return { order, created: true };
+  });
+}
+
+export interface ManualOrderInput {
+  customer: Omit<OrderCustomer, "agencia">;
+  items: { productId: string; quantity: number; variant?: string }[];
+  /** Total cobrado al cliente; si falta se calcula con ofertas y precios del catálogo. */
+  total?: number;
+  rateType: "CON RECAUDO" | "SIN RECAUDO";
+  notes: string;
+}
+
+/**
+ * Pedido ingresado a mano desde Pedidos (llamada, local, otra red), sin conversación.
+ * El contacto se crea o reutiliza por teléfono para que su historial quede junto.
+ */
+export async function createManualOrder(db: Database, tenantId: string, input: ManualOrderInput) {
+  return withTenant(db, tenantId, async (tx) => {
+    const [settings] = await tx.select().from(tenantSettings);
+    const country = (
+      settings?.country && settings.country in DROPI_COUNTRIES ? settings.country : "EC"
+    ) as DropiCountry;
+    const national = nationalPhone(input.customer.telefono, country);
+    if (national.length < 6) throw new OrderError("El teléfono no parece válido.");
+
+    const lines: OrderItem[] = [];
+    let sum = 0;
+    let currency = settings?.currency || "USD";
+    for (const it of input.items) {
+      const product = await loadProduct(tx, it.productId);
+      if (!product) throw new OrderError("Uno de los productos ya no existe.");
+      const { total, variant } = priceLine(product, it.quantity, it.variant);
+      sum += total;
+      currency = product.currency || currency;
+      lines.push({
+        productId: product.id,
+        name: product.name,
+        quantity: it.quantity,
+        unitPrice: (total / it.quantity).toFixed(2),
+        dropiProductId: product.dropiProductId,
+        dropiVariationId: variant?.dropiVariationId ?? null,
+        variant: variant?.name ?? it.variant,
+      });
+    }
+    const total = input.total ?? sum;
+    // Total escrito a mano: se reparte en las líneas para que Dropi reciba el mismo monto.
+    if (input.total !== undefined && sum > 0)
+      for (const l of lines) l.unitPrice = ((Number(l.unitPrice) * total) / sum).toFixed(2);
+
+    const name = [input.customer.nombre, input.customer.apellido].join(" ").trim();
+    const [contact] = await tx
+      .insert(contacts)
+      .values({
+        phone: DROPI_COUNTRIES[country].dial + national,
+        name: name || null,
+        city: input.customer.ciudad || null,
+      })
+      .onConflictDoUpdate({
+        target: [contacts.tenantId, contacts.phone],
+        set: { updatedAt: new Date() },
+      })
+      .returning({ id: contacts.id });
+
+    const [order] = await tx
+      .insert(orders)
+      .values({
+        contactId: contact?.id ?? null,
+        productId: lines[0]?.productId ?? null,
+        source: "humano",
+        customer: { ...input.customer, telefono: national },
+        items: lines,
+        total: total.toFixed(2),
+        currency,
+        rateType: input.rateType,
+        notes: input.notes,
+      })
+      .returning();
+    if (!order) throw new OrderError("No se pudo crear el pedido.");
+    await tx.insert(orderEvents).values({
+      orderId: order.id,
+      source: "humano",
+      stage: order.stage,
+      message: "Pedido ingresado a mano por un asesor.",
+    });
+    return order;
   });
 }
 
