@@ -59,26 +59,88 @@ function Copy({ value, label }: { value: string; label: string }) {
   );
 }
 
+type StepResult = { ok: true; note?: string } | { ok: false; error: string };
+type Setup = {
+  subscribed: StepResult;
+  appWebhook: StepResult;
+  webhook: StepResult;
+  ready: boolean;
+};
+type Discovered = {
+  app: { id: string; name: string };
+  token: { permanent: boolean; expiresAt: string | null; type: string | null };
+  missingScopes: string[];
+  warnings: string[];
+  numbers: {
+    phoneNumberId: string;
+    wabaId: string;
+    wabaName: string;
+    displayPhone: string;
+    verifiedName: string;
+    qualityRating: string | null;
+    status: string | null;
+    alreadyConnected: boolean;
+  }[];
+};
+
+const metaLink = (href: string, text: string) => (
+  <a className="underline" href={href} target="_blank" rel="noreferrer">
+    {text}
+  </a>
+);
+
+/** Lista de verificación del resultado de la configuración automática. */
+function SetupChecklist({ setup }: { setup: Setup }) {
+  const rows: [string, StepResult][] = [
+    ["App suscrita a tu cuenta de WhatsApp", setup.subscribed],
+    ["Webhook de la app", setup.appWebhook],
+    ["Webhook de este número apuntando a Selichat", setup.webhook],
+  ];
+  return (
+    <div className="space-y-1 text-sm">
+      {rows.map(([label, r]) => (
+        <div key={label}>
+          <span className={r.ok ? "text-brand-700 dark:text-brand-400" : "text-red-600"}>
+            {r.ok ? "✓" : "✗"}
+          </span>{" "}
+          {label}
+          {r.ok && r.note && <span className="text-zinc-500"> · {r.note}</span>}
+          {!r.ok && <span className="text-zinc-500"> · {r.error}</span>}
+        </div>
+      ))}
+      <div
+        className={`pt-1 font-medium ${setup.ready ? "text-brand-700 dark:text-brand-400" : "text-amber-700 dark:text-amber-400"}`}
+      >
+        {setup.ready
+          ? "Listo: los mensajes de WhatsApp llegarán a Conversaciones."
+          : "Falta configurar el webhook. Usa los datos de «Configuración manual del webhook» del número."}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Conexión manual en 3 pasos: la tienda pega token + App Secret, elige el número
+ * y Selichat configura el resto (suscripción y webhook) por su cuenta.
+ */
 function ConnectForm({ onDone }: { onDone: () => void }) {
-  const [f, setF] = useState({
-    name: "WhatsApp principal",
-    phoneNumberId: "",
-    wabaId: "",
-    accessToken: "",
-    appSecret: "",
-  });
+  const [creds, setCreds] = useState({ accessToken: "", appSecret: "" });
+  const [found, setFound] = useState<Discovered | null>(null);
+  const [pick, setPick] = useState("");
+  const [name, setName] = useState("WhatsApp principal");
+  const [setup, setSetup] = useState<Setup | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setF({ ...f, [k]: e.target.value.trim() });
 
-  async function submit(e: React.FormEvent) {
+  async function find(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      await api("/api/channels", { method: "POST", body: f });
-      onDone();
+      const d = await api<Discovered>("/api/channels/discover", { method: "POST", body: creds });
+      setFound(d);
+      const free = d.numbers.filter((n) => !n.alreadyConnected);
+      setPick(free.length === 1 ? (free[0]?.phoneNumberId ?? "") : "");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -86,89 +148,191 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
     }
   }
 
-  return (
-    <form onSubmit={submit} className="card space-y-4">
-      <div className="font-medium">Conectar un número</div>
-      <ol className="list-decimal space-y-1 pl-5 text-sm text-zinc-500">
-        <li>
-          En{" "}
-          <a
-            className="underline"
-            href="https://developers.facebook.com/apps"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Meta for Developers
-          </a>{" "}
-          crea una app tipo «Empresa» y agrega el producto <b>WhatsApp</b>.
-        </li>
-        <li>
-          En WhatsApp → Configuración de la API copia el <b>Phone Number ID</b> y el <b>WABA ID</b>.
-        </li>
-        <li>
-          En el Business Manager crea un <b>usuario del sistema</b> con permisos{" "}
-          <code>whatsapp_business_messaging</code> y <code>whatsapp_business_management</code> y
-          genera un token permanente.
-        </li>
-        <li>
-          En Configuración de la app → Básica copia el <b>App Secret</b>.
-        </li>
-        <li>
-          Guarda aquí y luego pega la URL del webhook y el token de verificación en Meta (suscribe
-          «messages»).
-        </li>
-      </ol>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block">
+  async function connect() {
+    const n = found?.numbers.find((x) => x.phoneNumberId === pick);
+    if (!n) return;
+    setBusy(true);
+    setError("");
+    try {
+      const ch = await api<{ setup: Setup }>("/api/channels", {
+        method: "POST",
+        body: { name, phoneNumberId: n.phoneNumberId, wabaId: n.wabaId, ...creds },
+      });
+      setSetup(ch.setup);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Paso 3: resultado.
+  if (setup)
+    return (
+      <div className="card space-y-4">
+        <div className="font-medium">3. Número conectado</div>
+        <SetupChecklist setup={setup} />
+        <button type="button" className="btn" onClick={onDone}>
+          Continuar
+        </button>
+      </div>
+    );
+
+  // Paso 2: elegir número.
+  if (found) {
+    const tokenDays = found.token.expiresAt
+      ? Math.max(0, Math.round((Date.parse(found.token.expiresAt) - Date.now()) / 86_400_000))
+      : null;
+    return (
+      <div className="card space-y-4">
+        <div className="font-medium">2. Elige el número</div>
+        <p className="text-sm text-zinc-500">
+          Token de la app <b>{found.app.name}</b>.
+        </p>
+        {!found.token.permanent && (
+          <ErrorText>
+            Este token es temporal y vence{" "}
+            {tokenDays === 0 ? "hoy" : `en ${tokenDays} día${tokenDays === 1 ? "" : "s"}`}: cuando
+            venza, el bot dejará de responder. Genera uno permanente con un usuario del sistema
+            (paso 2 de la guía).
+          </ErrorText>
+        )}
+        {found.missingScopes.length > 0 && (
+          <ErrorText>
+            Al token le faltan permisos: {found.missingScopes.join(", ")}. Vuelve a generarlo
+            marcándolos.
+          </ErrorText>
+        )}
+        {found.warnings.map((w) => (
+          <p key={w} className="text-sm text-amber-700 dark:text-amber-400">
+            {w}
+          </p>
+        ))}
+        {found.numbers.length === 0 ? (
+          <ErrorText>
+            El token no da acceso a ningún número. Al generar el token, asígnale al usuario del
+            sistema tu cuenta de WhatsApp Business con control total.
+          </ErrorText>
+        ) : (
+          <div className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+            {found.numbers.map((n) => (
+              <label
+                key={n.phoneNumberId}
+                className={`flex items-center gap-3 p-3 text-sm ${n.alreadyConnected ? "opacity-50" : "cursor-pointer"}`}
+              >
+                <input
+                  type="radio"
+                  name="numero"
+                  disabled={n.alreadyConnected}
+                  checked={pick === n.phoneNumberId}
+                  onChange={() => setPick(n.phoneNumberId)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">
+                    {n.displayPhone} <span className="text-zinc-500">{n.verifiedName}</span>
+                  </div>
+                  <div className="text-xs text-zinc-500">
+                    Cuenta {n.wabaName}
+                    {n.qualityRating ? ` · calidad ${n.qualityRating}` : ""}
+                    {n.status && n.status !== "CONNECTED" ? ` · estado en Meta: ${n.status}` : ""}
+                    {n.alreadyConnected ? " · ya está conectado en Selichat" : ""}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+        <label className="block max-w-sm">
           <span className="label">Nombre interno</span>
-          <input className="input" required value={f.name} onChange={set("name")} />
-        </label>
-        <label className="block">
-          <span className="label">Phone Number ID</span>
           <input
-            className="input font-mono"
+            className="input"
             required
-            inputMode="numeric"
-            value={f.phoneNumberId}
-            onChange={set("phoneNumberId")}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
           />
         </label>
-        <label className="block">
-          <span className="label">WABA ID (cuenta de WhatsApp Business)</span>
-          <input
-            className="input font-mono"
-            required
-            inputMode="numeric"
-            value={f.wabaId}
-            onChange={set("wabaId")}
-          />
-        </label>
-        <label className="block">
-          <span className="label">App Secret</span>
-          <input
-            className="input font-mono"
-            required
-            type="password"
-            autoComplete="off"
-            value={f.appSecret}
-            onChange={set("appSecret")}
-          />
-        </label>
+        <ErrorText>{error}</ErrorText>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || !pick || !name.trim()}
+            onClick={connect}
+          >
+            {busy ? "Conectando y configurando…" : "Conectar este número"}
+          </button>
+          <button type="button" className="btn-ghost" onClick={() => setFound(null)}>
+            Atrás
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Paso 1: token + App Secret.
+  return (
+    <form onSubmit={find} className="card space-y-4">
+      <div className="font-medium">1. Conecta tu app de Meta</div>
+      <p className="text-sm text-zinc-500">
+        Solo necesitas dos datos. Selichat encuentra tus números y configura el webhook por ti.
+      </p>
+      <details className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+        <summary className="cursor-pointer font-medium">
+          ¿Dónde los consigo? (guía paso a paso)
+        </summary>
+        <ol className="mt-2 list-decimal space-y-2 pl-5 text-zinc-600 dark:text-zinc-400">
+          <li>
+            En {metaLink("https://developers.facebook.com/apps/creation/", "Meta for Developers")}{" "}
+            crea una app, elige el caso de uso <b>«Conectar con clientes a través de WhatsApp»</b> y
+            vincúlala a tu portafolio comercial.
+          </li>
+          <li>
+            En{" "}
+            {metaLink(
+              "https://business.facebook.com/latest/settings/system_users",
+              "Usuarios del sistema",
+            )}{" "}
+            crea un usuario <b>administrador</b>. Pulsa «Asignar activos» → Cuentas de WhatsApp → tu
+            cuenta → <b>control total</b>. Luego «Generar token»: elige tu app, vencimiento{" "}
+            <b>«Nunca»</b> y marca <code>whatsapp_business_messaging</code> y{" "}
+            <code>whatsapp_business_management</code>. Copia el token.
+          </li>
+          <li>
+            En tu app → Configuración de la app → <b>Básica</b>, pulsa «Mostrar» en{" "}
+            <b>Clave secreta de la app</b> y cópiala.
+          </li>
+        </ol>
+      </details>
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="block sm:col-span-2">
           <span className="label">Token de acceso permanente</span>
           <input
             className="input font-mono"
             required
+            minLength={20}
             type="password"
             autoComplete="off"
-            value={f.accessToken}
-            onChange={set("accessToken")}
+            value={creds.accessToken}
+            onChange={(e) => setCreds({ ...creds, accessToken: e.target.value.trim() })}
+          />
+        </label>
+        <label className="block">
+          <span className="label">Clave secreta de la app (App Secret)</span>
+          <input
+            className="input font-mono"
+            required
+            pattern="[a-fA-F0-9]{32}"
+            title="32 caracteres (letras a-f y números)"
+            type="password"
+            autoComplete="off"
+            value={creds.appSecret}
+            onChange={(e) => setCreds({ ...creds, appSecret: e.target.value.trim() })}
           />
         </label>
       </div>
       <ErrorText>{error}</ErrorText>
       <button type="submit" className="btn" disabled={busy}>
-        {busy ? "Verificando con Meta…" : "Conectar"}
+        {busy ? "Buscando tus números en Meta…" : "Buscar mis números"}
       </button>
     </form>
   );
@@ -542,6 +706,7 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
   const [notice, setNotice] = useState("");
   const [token, setToken] = useState("");
   const [secret, setSecret] = useState("");
+  const [setup, setSetup] = useState<Setup | null>(null);
 
   async function run(fn: () => Promise<unknown>, ok: string) {
     setError("");
@@ -580,32 +745,48 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
       </div>
       {ch.lastError && <ErrorText>{ch.lastError}</ErrorText>}
 
-      <div className="space-y-3">
-        <div className="text-sm font-medium">
-          Webhook (pégalo en Meta → WhatsApp → Configuración)
-        </div>
-        <Copy label="URL de devolución de llamada" value={ch.webhookUrl} />
-        <Copy label="Token de verificación" value={ch.verifyToken} />
-        <div className="text-xs text-zinc-500">
-          {ch.webhookVerifiedAt
-            ? `✓ Verificado por Meta el ${new Date(ch.webhookVerifiedAt).toLocaleString()}`
-            : "Aún no verificado por Meta."}{" "}
-          {ch.lastEventAt ? `Último evento: ${new Date(ch.lastEventAt).toLocaleString()}.` : ""}
-        </div>
+      <div className="text-xs text-zinc-500">
+        {ch.webhookVerifiedAt
+          ? `✓ Webhook verificado por Meta el ${new Date(ch.webhookVerifiedAt).toLocaleString()}.`
+          : "Webhook aún no verificado por Meta: pulsa «Probar y reparar conexión»."}{" "}
+        {ch.lastEventAt
+          ? `Último mensaje recibido: ${new Date(ch.lastEventAt).toLocaleString()}.`
+          : ""}
       </div>
+      {setup && <SetupChecklist setup={setup} />}
+
+      <details
+        className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+        open={!ch.webhookVerifiedAt && !!setup && !setup.ready}
+      >
+        <summary className="cursor-pointer text-sm font-medium">
+          Configuración manual del webhook (solo si la automática falla)
+        </summary>
+        <div className="mt-3 space-y-3">
+          <p className="text-xs text-zinc-500">
+            Pégalos en Meta → tu app → WhatsApp → Configuración → Webhook, y suscribe el campo
+            «messages».
+          </p>
+          <Copy label="URL de devolución de llamada" value={ch.webhookUrl} />
+          <Copy label="Token de verificación" value={ch.verifyToken} />
+        </div>
+      </details>
 
       <div className="flex flex-wrap items-end gap-2">
         <button
           type="button"
           className="btn-ghost"
           onClick={() =>
-            run(
-              () => api(`/api/channels/${ch.id}/test`, { method: "POST" }),
-              "Conexión con Meta OK.",
-            )
+            run(async () => {
+              setSetup(null);
+              const r = await api<{ setup: Setup }>(`/api/channels/${ch.id}/test`, {
+                method: "POST",
+              });
+              setSetup(r.setup);
+            }, "Conexión con Meta OK.")
           }
         >
-          Probar conexión
+          Probar y reparar conexión
         </button>
         <input
           className="input max-w-xs font-mono"

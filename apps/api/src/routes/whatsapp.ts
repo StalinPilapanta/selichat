@@ -1,13 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { type Database, schema, withTenant } from "@chatea/db";
 import { decryptSecret, encryptSecret } from "@chatea/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
 import { requireTenant } from "../plugins/tenant.js";
 import type { RealtimeBus } from "../realtime.js";
 import { GraphError } from "../whatsapp/graph.js";
+import { autoSetup, discover, OnboardingError } from "../whatsapp/onboarding.js";
 import { parseWebhook } from "../whatsapp/parse.js";
 import { type Channel, graphFor, ingestWebhook, type WaConfig } from "../whatsapp/service.js";
 import { verifySignature } from "../whatsapp/signature.js";
@@ -81,6 +82,22 @@ export async function whatsappRoutes(
   const anyMember = requireTenant(auth, db);
   const admins = requireTenant(auth, db, ["owner", "admin"]);
 
+  const graphOpts = { version: wa.graphVersion, fetchImpl: wa.fetchImpl };
+  const webhookUrlOf = (id: string) => `${opts.publicBaseUrl}/api/webhooks/whatsapp/${id}`;
+  /** Suscribe la app y deja el webhook apuntando a Selichat (nunca lanza). */
+  const setupChannel = (c: Channel) =>
+    autoSetup(
+      {
+        accessToken: decryptSecret(c.accessTokenEnc, wa.encryptionKey),
+        appSecret: decryptSecret(c.appSecretEnc, wa.encryptionKey),
+        wabaId: c.wabaId,
+        phoneNumberId: c.phoneNumberId,
+        webhookUrl: webhookUrlOf(c.id),
+        verifyToken: c.verifyToken,
+      },
+      graphOpts,
+    );
+
   const publicChannel = (c: Channel) => ({
     id: c.id,
     name: c.name,
@@ -92,7 +109,7 @@ export async function whatsappRoutes(
     lastError: c.lastError,
     webhookVerifiedAt: c.webhookVerifiedAt,
     lastEventAt: c.lastEventAt,
-    webhookUrl: `${opts.publicBaseUrl}/api/webhooks/whatsapp/${c.id}`,
+    webhookUrl: webhookUrlOf(c.id),
     verifyToken: c.verifyToken,
   });
 
@@ -181,6 +198,39 @@ export async function whatsappRoutes(
     return rows.map(publicChannel);
   });
 
+  /** Paso 1 de la conexión: con token + App Secret, lista los números disponibles. */
+  app.post("/api/channels/discover", { preHandler: admins }, async (req, reply) => {
+    const body = channelBody.pick({ accessToken: true, appSecret: true }).safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+    try {
+      const d = await discover(body.data.accessToken, body.data.appSecret, graphOpts);
+      const taken = d.numbers.length
+        ? await db
+            .select({ phoneNumberId: channelRoutes.phoneNumberId })
+            .from(channelRoutes)
+            .where(
+              inArray(
+                channelRoutes.phoneNumberId,
+                d.numbers.map((n) => n.phoneNumberId),
+              ),
+            )
+        : [];
+      const takenIds = new Set(taken.map((t) => t.phoneNumberId));
+      return {
+        ...d,
+        numbers: d.numbers.map((n) => ({
+          ...n,
+          alreadyConnected: takenIds.has(n.phoneNumberId),
+        })),
+      };
+    } catch (e) {
+      if (e instanceof OnboardingError)
+        return reply.code(400).send({ error: `whatsapp_${e.code}`, detail: e.message });
+      throw e;
+    }
+  });
+
   app.post("/api/channels", { preHandler: admins }, async (req, reply) => {
     const body = channelBody.safeParse(req.body);
     if (!body.success)
@@ -230,7 +280,9 @@ export async function whatsappRoutes(
     await db
       .insert(channelRoutes)
       .values({ channelId: ch.id, tenantId: ch.tenantId, phoneNumberId: ch.phoneNumberId });
-    return reply.code(201).send(publicChannel(ch));
+    // Después de crear la ruta: Meta verifica el webhook llamando a esta misma API.
+    const setup = await setupChannel(ch);
+    return reply.code(201).send({ ...publicChannel(ch), setup });
   });
 
   app.patch<{ Params: { id: string } }>(
@@ -274,9 +326,9 @@ export async function whatsappRoutes(
         const [ch] = await tx.select().from(channels).where(eq(channels.id, req.params.id));
         if (!ch) return reply.code(404).send();
         try {
-          const graph = graphFor(ch, wa);
-          const info = await graph.phoneNumber(ch.phoneNumberId);
-          await graph.subscribeApp(ch.wabaId);
+          const info = await graphFor(ch, wa).phoneNumber(ch.phoneNumberId);
+          const setup = await setupChannel(ch);
+          if (!setup.subscribed.ok) throw new Error(setup.subscribed.error);
           const [row] = await tx
             .update(channels)
             .set({
@@ -291,6 +343,7 @@ export async function whatsappRoutes(
             ok: true,
             channel: row ? publicChannel(row) : null,
             qualityRating: info.quality_rating ?? null,
+            setup,
           };
         } catch (e) {
           await tx

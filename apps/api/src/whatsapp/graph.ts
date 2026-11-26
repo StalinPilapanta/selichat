@@ -74,6 +74,84 @@ export class Graph {
     return this.call<{ success: boolean }>("POST", `${wabaId}/subscribed_apps`);
   }
 
+  /** App de Meta a la que pertenece el token. */
+  tokenApp() {
+    return this.call<{ id: string; name?: string }>("GET", "app?fields=id,name");
+  }
+
+  /** Con un token de app (`id|secret`): falla si el App Secret no es el de esa app. */
+  appInfo(appId: string) {
+    return this.call<{ id: string; name?: string }>("GET", `${appId}?fields=id,name`);
+  }
+
+  /** Con un token de app: tipo, vencimiento, permisos y WABAs a las que da acceso el token. */
+  async debugToken(inputToken: string) {
+    const r = await this.call<{
+      data: {
+        is_valid?: boolean;
+        type?: string;
+        expires_at?: number;
+        scopes?: string[];
+        granular_scopes?: { scope: string; target_ids?: string[] }[];
+      };
+    }>("GET", `debug_token?input_token=${encodeURIComponent(inputToken)}`);
+    return r.data;
+  }
+
+  /** WABAs de los negocios del usuario del sistema (respaldo si el token no trae target_ids). */
+  async ownedWabas() {
+    const r = await this.call<{
+      data?: { owned_whatsapp_business_accounts?: { data?: { id: string; name?: string }[] } }[];
+    }>("GET", "me/businesses?fields=owned_whatsapp_business_accounts{id,name}");
+    return (r.data ?? []).flatMap((b) => b.owned_whatsapp_business_accounts?.data ?? []);
+  }
+
+  waba(wabaId: string) {
+    return this.call<{ id: string; name?: string }>("GET", `${wabaId}?fields=id,name`);
+  }
+
+  async wabaPhoneNumbers(wabaId: string) {
+    const r = await this.call<{
+      data: {
+        id: string;
+        display_phone_number: string;
+        verified_name: string;
+        quality_rating?: string;
+        code_verification_status?: string;
+        status?: string;
+      }[];
+    }>(
+      "GET",
+      `${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status,status`,
+    );
+    return r.data;
+  }
+
+  /** Webhook propio de este número (gana sobre el de la WABA y el de la app). */
+  setPhoneWebhook(phoneNumberId: string, callbackUrl: string, verifyToken: string) {
+    return this.call<{ success: boolean }>("POST", phoneNumberId, {
+      webhook_configuration: { override_callback_uri: callbackUrl, verify_token: verifyToken },
+    });
+  }
+
+  /** Con un token de app: suscripciones de webhooks configuradas en la app. */
+  async appSubscriptions(appId: string) {
+    const r = await this.call<{
+      data: { object: string; callback_url?: string; fields?: { name: string }[] }[];
+    }>("GET", `${appId}/subscriptions`);
+    return r.data;
+  }
+
+  /** Con un token de app: configura el webhook de WhatsApp de la app (Meta lo verifica al instante). */
+  subscribeAppWebhook(appId: string, callbackUrl: string, verifyToken: string) {
+    return this.call<{ success: boolean }>("POST", `${appId}/subscriptions`, {
+      object: "whatsapp_business_account",
+      callback_url: callbackUrl,
+      verify_token: verifyToken,
+      fields: "messages",
+    });
+  }
+
   phoneNumber(phoneNumberId: string) {
     return this.call<{
       id: string;

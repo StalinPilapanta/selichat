@@ -54,6 +54,7 @@ const MESSAGES: Record<string, string> = {
   archivo_muy_grande: "El archivo es muy grande.",
   no_existe: "No existe o fue eliminado.",
   whatsapp_token_invalido: "Meta rechazó el token de acceso.",
+  whatsapp_app_secret_no_coincide: "El App Secret no es el de la app del token.",
   whatsapp_meta_error: "Meta devolvió un error:",
   numero_ya_conectado: "Ese número ya está conectado (en esta u otra tienda).",
   ventana_cerrada:
