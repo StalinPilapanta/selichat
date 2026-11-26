@@ -38,6 +38,9 @@ function fakeMeta() {
       if (body.status === "read") return Response.json({ success: true });
       return Response.json({ messages: [{ id: `wamid.OUT${++counter}` }] });
     }
+    if (url.includes("/message_templates") && init?.method === "DELETE")
+      return Response.json({ success: true });
+    if (/\/TPL-NEW$/.test(url) && init?.method === "POST") return Response.json({ success: true });
     if (url.includes("/message_templates") && init?.method === "POST")
       return Response.json({ id: "TPL-NEW", status: "PENDING", category: body.category });
     if (url.includes("/message_templates"))
@@ -359,6 +362,32 @@ describe.skipIf(!hasDb)("WhatsApp + bandeja", () => {
         { type: "BODY", text: "Hola {{1}}, tu pedido sale hoy", example: { body_text: [["Ana"]] } },
       ],
     });
+
+    const tplId = ok.json().id;
+    const edited = await h.call(
+      owner.cookie,
+      "PATCH",
+      `/api/channels/${channel.id}/templates/${tplId}`,
+      { category: "UTILITY", body: "Hola {{1}}, tu pedido sale mañana", examples: ["Ana"] },
+    );
+    expect(edited.statusCode, edited.body).toBe(200);
+    expect(edited.json()).toMatchObject({ status: "PENDING" });
+    expect(meta.sent.at(-1)?.url).toMatch(/\/TPL-NEW$/);
+    expect(meta.sent.at(-1)?.body).toMatchObject({
+      components: [{ type: "BODY", text: "Hola {{1}}, tu pedido sale mañana" }],
+    });
+
+    const del = await h.call(
+      owner.cookie,
+      "DELETE",
+      `/api/channels/${channel.id}/templates/${tplId}`,
+    );
+    expect(del.statusCode).toBe(204);
+    expect(meta.sent.at(-1)?.url).toContain("hsm_id=TPL-NEW");
+    const left = (
+      await h.call(owner.cookie, "GET", `/api/channels/${channel.id}/templates`)
+    ).json();
+    expect(left.find((t: { id: string }) => t.id === tplId)).toBeUndefined();
   });
 
   it("notas, pausa del bot, etiquetas e aislamiento entre tiendas", async () => {

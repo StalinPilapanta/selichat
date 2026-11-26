@@ -172,4 +172,15 @@ export class Graph {
       t,
     );
   }
+
+  /** Cambia el contenido; Meta la vuelve a revisar (una aprobada admite pocas ediciones). */
+  editTemplate(templateId: string, t: { category?: string; components: unknown[] }) {
+    return this.call<{ success: boolean }>("POST", encodeURIComponent(templateId), t);
+  }
+
+  /** Borra solo ese idioma (hsm_id). El nombre no se puede reutilizar durante 30 días. */
+  deleteTemplate(wabaId: string, name: string, templateId: string) {
+    const q = new URLSearchParams({ name, hsm_id: templateId });
+    return this.call<{ success: boolean }>("DELETE", `${wabaId}/message_templates?${q}`);
+  }
 }

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { type Database, schema, withTenant } from "@chatea/db";
 import { decryptSecret, encryptSecret } from "@chatea/shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
@@ -41,6 +41,28 @@ const templateBody = z.object({
   /** Ejemplos para {{1}}, {{2}}… (Meta los exige para aprobar). */
   examples: z.array(z.string().min(1)).max(20).default([]),
   footer: z.string().max(60).optional(),
+});
+
+/** Arma los componentes de Meta; exige un ejemplo por cada {{n}}. */
+function buildComponents(t: { body: string; examples: string[]; footer?: string }) {
+  const vars = [...t.body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
+  const count = vars.length ? Math.max(...vars) : 0;
+  if (t.examples.length < count) return { missing: count };
+  const components: Record<string, unknown>[] = [
+    {
+      type: "BODY",
+      text: t.body,
+      ...(count ? { example: { body_text: [t.examples.slice(0, count)] } } : {}),
+    },
+  ];
+  if (t.footer) components.push({ type: "FOOTER", text: t.footer });
+  return { components };
+}
+const templateEdit = templateBody.pick({
+  category: true,
+  body: true,
+  examples: true,
+  footer: true,
 });
 
 export async function whatsappRoutes(
@@ -374,19 +396,10 @@ export async function whatsappRoutes(
       const body = templateBody.safeParse(req.body);
       if (!body.success)
         return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
-      const vars = [...body.data.body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
-      const count = vars.length ? Math.max(...vars) : 0;
-      if (body.data.examples.length < count)
-        return reply.code(400).send({ error: "faltan_ejemplos", count });
-
-      const components: Record<string, unknown>[] = [
-        {
-          type: "BODY",
-          text: body.data.body,
-          ...(count ? { example: { body_text: [body.data.examples.slice(0, count)] } } : {}),
-        },
-      ];
-      if (body.data.footer) components.push({ type: "FOOTER", text: body.data.footer });
+      const built = buildComponents(body.data);
+      if ("missing" in built)
+        return reply.code(400).send({ error: "faltan_ejemplos", count: built.missing });
+      const { components } = built;
 
       return withTenant(db, req.ctx.tenantId, async (tx) => {
         const [ch] = await tx.select().from(channels).where(eq(channels.id, req.params.id));
@@ -427,6 +440,100 @@ export async function whatsappRoutes(
             return reply.code(400).send({ error: "whatsapp_meta_error", detail: e.message });
           throw e;
         }
+      });
+    },
+  );
+
+  app.patch<{ Params: { id: string; tplId: string } }>(
+    "/api/channels/:id/templates/:tplId",
+    { preHandler: admins },
+    async (req, reply) => {
+      if (!isUuid(req.params.id) || !isUuid(req.params.tplId)) return reply.code(404).send();
+      const body = templateEdit.safeParse(req.body);
+      if (!body.success)
+        return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+      const built = buildComponents(body.data);
+      if ("missing" in built)
+        return reply.code(400).send({ error: "faltan_ejemplos", count: built.missing });
+      const { components } = built;
+      return withTenant(db, req.ctx.tenantId, async (tx) => {
+        const [ch] = await tx.select().from(channels).where(eq(channels.id, req.params.id));
+        const [tpl] = await tx
+          .select()
+          .from(messageTemplates)
+          .where(
+            and(
+              eq(messageTemplates.id, req.params.tplId),
+              eq(messageTemplates.channelId, req.params.id),
+            ),
+          );
+        if (!ch || !tpl) return reply.code(404).send();
+        if (!tpl.metaId) return reply.code(400).send({ error: "plantilla_sin_meta" });
+        // Meta solo deja cambiar la categoría si la plantilla no está aprobada.
+        const category =
+          tpl.status !== "APPROVED" && body.data.category !== tpl.category
+            ? body.data.category
+            : undefined;
+        try {
+          await graphFor(ch, wa).editTemplate(tpl.metaId, {
+            ...(category ? { category } : {}),
+            components,
+          });
+        } catch (e) {
+          if (e instanceof GraphError)
+            return reply.code(400).send({ error: "whatsapp_meta_error", detail: e.message });
+          throw e;
+        }
+        const [row] = await tx
+          .update(messageTemplates)
+          .set({
+            components,
+            status: "PENDING",
+            rejectedReason: null,
+            ...(category ? { category } : {}),
+          })
+          .where(eq(messageTemplates.id, tpl.id))
+          .returning();
+        await tx
+          .insert(auditLog)
+          .values({ actorUserId: req.ctx.userId, action: "template.updated", target: tpl.id });
+        return row;
+      });
+    },
+  );
+
+  app.delete<{ Params: { id: string; tplId: string } }>(
+    "/api/channels/:id/templates/:tplId",
+    { preHandler: admins },
+    async (req, reply) => {
+      if (!isUuid(req.params.id) || !isUuid(req.params.tplId)) return reply.code(404).send();
+      return withTenant(db, req.ctx.tenantId, async (tx) => {
+        const [ch] = await tx.select().from(channels).where(eq(channels.id, req.params.id));
+        const [tpl] = await tx
+          .select()
+          .from(messageTemplates)
+          .where(
+            and(
+              eq(messageTemplates.id, req.params.tplId),
+              eq(messageTemplates.channelId, req.params.id),
+            ),
+          );
+        if (!ch || !tpl) return reply.code(404).send();
+        if (tpl.metaId) {
+          try {
+            await graphFor(ch, wa).deleteTemplate(ch.wabaId, tpl.name, tpl.metaId);
+          } catch (e) {
+            // Si ya no existe en Meta, igual se borra aquí.
+            if (!(e instanceof GraphError)) throw e;
+            if (e.status !== 404 && e.code !== 100)
+              return reply.code(400).send({ error: "whatsapp_meta_error", detail: e.message });
+          }
+        }
+        await tx.delete(messageTemplates).where(eq(messageTemplates.id, tpl.id));
+        await tx
+          .insert(auditLog)
+          .values({ actorUserId: req.ctx.userId, action: "template.deleted", target: tpl.name });
+        return reply.code(204).send();
       });
     },
   );

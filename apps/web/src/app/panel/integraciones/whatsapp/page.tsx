@@ -1,5 +1,6 @@
 "use client";
-import { MessageCircle } from "lucide-react";
+import { NOTICE_INFO, SUGGESTED_TEMPLATES } from "@chatea/shared";
+import { MessageCircle, Pencil, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
@@ -26,7 +27,7 @@ type Template = {
   category: string;
   status: string;
   rejectedReason: string | null;
-  components: { type: string; text?: string }[];
+  components: { type: string; text?: string; example?: { body_text?: string[][] } }[];
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -178,14 +179,17 @@ function Templates({ channel }: { channel: Channel }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
-  const [t, setT] = useState({
+  /** Plantilla que se está editando (null = creando una nueva). */
+  const [editing, setEditing] = useState<Template | null>(null);
+  const empty = {
     name: "",
     language: "es",
     category: "UTILITY",
     body: "",
     footer: "",
     examples: [] as string[],
-  });
+  };
+  const [t, setT] = useState(empty);
 
   const load = useCallback(() => {
     api<Template[]>(`/api/channels/${channel.id}/templates`)
@@ -209,23 +213,101 @@ function Templates({ channel }: { channel: Channel }) {
     }
   }
 
-  async function create(e: React.FormEvent) {
+  function startNew(prefill?: Partial<typeof empty>) {
+    setEditing(null);
+    setT({ ...empty, ...prefill });
+    setOpen(true);
+  }
+
+  function startEdit(x: Template) {
+    const body = x.components.find((c) => c.type.toUpperCase() === "BODY");
+    const footer = x.components.find((c) => c.type.toUpperCase() === "FOOTER");
+    setEditing(x);
+    setT({
+      name: x.name,
+      language: x.language,
+      category: x.category,
+      body: body?.text ?? "",
+      footer: footer?.text ?? "",
+      examples: body?.example?.body_text?.[0] ?? [],
+    });
+    setOpen(true);
+  }
+
+  async function save(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
+    const payload = {
+      ...t,
+      footer: t.footer || undefined,
+      examples: t.examples.slice(0, varCount),
+    };
     try {
-      await api(`/api/channels/${channel.id}/templates`, {
-        method: "POST",
-        body: { ...t, footer: t.footer || undefined, examples: t.examples.slice(0, varCount) },
-      });
+      if (editing) {
+        const { name: _n, language: _l, ...rest } = payload;
+        await api(`/api/channels/${channel.id}/templates/${editing.id}`, {
+          method: "PATCH",
+          body: rest,
+        });
+      } else {
+        await api(`/api/channels/${channel.id}/templates`, { method: "POST", body: payload });
+      }
       setOpen(false);
-      setT({ ...t, name: "", body: "", footer: "", examples: [] });
+      setEditing(null);
+      setT(empty);
       load();
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function remove(x: Template) {
+    if (
+      !confirm(
+        `¿Eliminar la plantilla «${x.name}» (${x.language})? Se borra también en Meta y ese nombre no se podrá volver a usar durante 30 días.`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/channels/${channel.id}/templates/${x.id}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const missing = SUGGESTED_TEMPLATES.filter((s) => !list.some((x) => x.name === s.name));
+
+  async function createAllSuggested() {
+    setBusy(true);
+    setError("");
+    const failed: string[] = [];
+    for (const s of missing) {
+      try {
+        await api(`/api/channels/${channel.id}/templates`, {
+          method: "POST",
+          body: {
+            name: s.name,
+            language: "es",
+            category: "UTILITY",
+            body: s.body,
+            examples: s.examples,
+          },
+        });
+      } catch (err) {
+        failed.push(`${s.name}: ${errorMessage(err)}`);
+      }
+    }
+    if (failed.length) setError(failed.join(" · "));
+    setBusy(false);
+    load();
   }
 
   return (
@@ -235,7 +317,11 @@ function Templates({ channel }: { channel: Channel }) {
         <button type="button" className="btn-ghost" disabled={busy} onClick={sync}>
           Sincronizar con Meta
         </button>
-        <button type="button" className="btn-ghost" onClick={() => setOpen(!open)}>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => (open && !editing ? setOpen(false) : startNew())}
+        >
           Nueva plantilla
         </button>
       </div>
@@ -245,17 +331,66 @@ function Templates({ channel }: { channel: Channel }) {
         antes de aprobarlas.
       </p>
       <ErrorText>{error}</ErrorText>
+      {missing.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-brand-200 bg-brand-50/50 p-4 dark:border-brand-900 dark:bg-brand-950/30">
+          <div className="flex flex-wrap items-center gap-2">
+            <Sparkles className="size-4 text-brand-600" />
+            <span className="mr-auto font-medium">
+              Plantillas sugeridas para los avisos de pedidos
+            </span>
+            <button type="button" className="btn" disabled={busy} onClick={createAllSuggested}>
+              {busy ? "Enviando…" : `Enviar las ${missing.length} a Meta`}
+            </button>
+          </div>
+          <p className="text-sm text-zinc-500">
+            Ya vienen con las variables en el orden que usan los avisos automáticos ({"{{1}}"}{" "}
+            nombre, {"{{2}}"} producto, {"{{3}}"} guía, {"{{4}}"} agencia, {"{{5}}"} ciudad,{" "}
+            {"{{6}}"} seguimiento). Cuando Meta las apruebe, ponlas en Integraciones → Dropi →
+            Avisos.
+          </p>
+          <ul className="divide-y divide-brand-100 text-sm dark:divide-brand-900">
+            {missing.map((s) => (
+              <li key={s.name} className="flex flex-wrap items-start gap-2 py-2">
+                <div className="min-w-0 flex-1">
+                  <div>
+                    <span className="font-mono font-medium">{s.name}</span>{" "}
+                    <span className="text-xs text-zinc-500">· {NOTICE_INFO[s.kind].label}</span>
+                  </div>
+                  <div className="text-zinc-500">{s.body}</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-ghost shrink-0"
+                  onClick={() =>
+                    startNew({ name: s.name, body: s.body, examples: [...s.examples] })
+                  }
+                >
+                  Revisar antes
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {open && (
         <form
-          onSubmit={create}
+          onSubmit={save}
           className="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
         >
+          {editing && (
+            <div className="text-sm text-zinc-500">
+              Editando <span className="font-mono font-medium">{editing.name}</span>. Meta la vuelve
+              a revisar; una plantilla aprobada solo admite pocas ediciones al mes y su categoría no
+              se puede cambiar.
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="block">
               <span className="label">Nombre</span>
               <input
                 className="input font-mono"
                 required
+                disabled={!!editing}
                 placeholder="confirmacion_pedido"
                 value={t.name}
                 onChange={(e) =>
@@ -267,6 +402,7 @@ function Templates({ channel }: { channel: Channel }) {
               <span className="label">Idioma</span>
               <select
                 className="input"
+                disabled={!!editing}
                 value={t.language}
                 onChange={(e) => setT({ ...t, language: e.target.value })}
               >
@@ -280,6 +416,7 @@ function Templates({ channel }: { channel: Channel }) {
               <span className="label">Categoría</span>
               <select
                 className="input"
+                disabled={editing?.status === "APPROVED"}
                 value={t.category}
                 onChange={(e) => setT({ ...t, category: e.target.value })}
               >
@@ -329,9 +466,21 @@ function Templates({ channel }: { channel: Channel }) {
               onChange={(e) => setT({ ...t, footer: e.target.value })}
             />
           </label>
-          <button type="submit" className="btn" disabled={busy}>
-            Enviar a revisión de Meta
-          </button>
+          <div className="flex gap-2">
+            <button type="submit" className="btn" disabled={busy}>
+              {editing ? "Guardar y enviar a revisión" : "Enviar a revisión de Meta"}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                setOpen(false);
+                setEditing(null);
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
         </form>
       )}
       <div className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
@@ -352,6 +501,26 @@ function Templates({ channel }: { channel: Channel }) {
               >
                 {x.status}
               </span>
+              <button
+                type="button"
+                className="btn-ghost px-2"
+                title="Editar"
+                aria-label={`Editar ${x.name}`}
+                disabled={busy}
+                onClick={() => startEdit(x)}
+              >
+                <Pencil className="size-4" />
+              </button>
+              <button
+                type="button"
+                className="btn-ghost px-2 text-red-600"
+                title="Eliminar"
+                aria-label={`Eliminar ${x.name}`}
+                disabled={busy}
+                onClick={() => remove(x)}
+              >
+                <Trash2 className="size-4" />
+              </button>
             </div>
             <div className="mt-1 text-zinc-500">
               {x.components.find((c) => c.type.toUpperCase() === "BODY")?.text}

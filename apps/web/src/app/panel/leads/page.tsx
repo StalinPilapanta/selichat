@@ -11,7 +11,7 @@ import {
   ORDER_STAGES,
   type OrderStage,
 } from "@chatea/shared";
-import { KanbanSquare } from "lucide-react";
+import { KanbanSquare, Package, Phone } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorText, PageHeader } from "@/components/ui";
@@ -104,9 +104,21 @@ function Card({
           </span>
         )}
       </div>
-      <div className="mt-0.5 truncate text-xs text-zinc-500">
-        {l.productName ?? "Sin producto"}
-        {l.assignedName ? ` · ${l.assignedName}` : ""}
+      {(l.name || l.profileName) && (
+        <a
+          href={`tel:+${l.phone}`}
+          className="mt-1 flex items-center gap-1.5 text-xs tabular-nums text-zinc-600 hover:text-brand-700 dark:text-zinc-400 dark:hover:text-brand-400"
+        >
+          <Phone className="size-3 shrink-0" />
+          {formatPhone(l.phone)}
+        </a>
+      )}
+      <div className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-zinc-500">
+        <Package className="size-3 shrink-0" />
+        <span className="truncate">
+          {l.productName ?? "Sin producto"}
+          {l.assignedName ? ` · ${l.assignedName}` : ""}
+        </span>
       </div>
       {l.order && LEAD_SOLD.includes(l.stage) && (
         <div className="mt-1 truncate text-xs">
@@ -158,7 +170,8 @@ function Card({
           </span>
         )}
       </div>
-      <label className="mt-2 block">
+      {/* En computadora se arrastra la tarjeta; en el celular (sin arrastrar) queda el selector. */}
+      <label className="mt-2 block md:hidden">
         <span className="sr-only">Mover a</span>
         <select
           className="w-full rounded border border-zinc-200 bg-transparent px-1 py-0.5 text-xs dark:border-zinc-700"

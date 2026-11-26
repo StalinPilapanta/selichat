@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { dropiOptionsSchema, NOTICE_INFO, renderNotice } from "./orders.js";
+import {
+  dropiOptionsSchema,
+  NOTICE_INFO,
+  NOTICE_KINDS,
+  renderNotice,
+  SUGGESTED_TEMPLATES,
+} from "./orders.js";
 
 describe("avisos logísticos", () => {
   it("convierte la configuración anterior (retiro/novedad/plantillas sueltas)", () => {
@@ -51,5 +57,18 @@ describe("avisos logísticos", () => {
     expect(out).not.toMatch(/\{\w+\}/);
     // Variables desconocidas se dejan como están (para que el usuario note el error).
     expect(renderNotice("Hola {nombre} {otra}", { nombre: "Ana" })).toBe("Hola Ana {otra}");
+  });
+
+  it("las plantillas sugeridas cumplen las reglas de Meta", () => {
+    expect(SUGGESTED_TEMPLATES.map((t) => t.kind).sort()).toEqual([...NOTICE_KINDS].sort());
+    for (const t of SUGGESTED_TEMPLATES) {
+      expect(t.name).toMatch(/^[a-z0-9_]+$/);
+      const nums = [...t.body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
+      // Variables seguidas desde {{1}} y un ejemplo por cada una.
+      expect(nums).toEqual(nums.map((_, i) => i + 1));
+      expect(t.examples).toHaveLength(nums.length);
+      expect(t.body).not.toMatch(/^\s*\{\{|\}\}\s*$/);
+      expect(t.body.length).toBeLessThanOrEqual(1024);
+    }
   });
 });

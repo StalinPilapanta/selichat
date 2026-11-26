@@ -169,6 +169,61 @@ export const NOTICE_TEMPLATE_PARAMS = [
   "seguimiento",
 ] as const;
 
+/**
+ * Plantillas listas para enviar a Meta, una por aviso. Usan las variables en el orden de
+ * NOTICE_TEMPLATE_PARAMS y no empiezan ni terminan con variable (Meta las rechaza).
+ */
+export const SUGGESTED_TEMPLATES: {
+  kind: NoticeKind;
+  name: string;
+  body: string;
+  examples: string[];
+}[] = [
+  {
+    kind: "guia",
+    name: "pedido_despachado",
+    body: "Hola {{1}}, tu pedido de {{2}} ya fue despachado. Guía {{3}} con {{4}} hacia {{5}}. Puedes seguirlo aquí: {{6}} ¡Gracias por tu compra!",
+    examples: [
+      "Ana",
+      "Mega Red",
+      "1800456789",
+      "Servientrega",
+      "Ambato",
+      "https://www.servientrega.com.ec/Tracking/?guia=1800456789&tipo=GUIA",
+    ],
+  },
+  {
+    kind: "transito",
+    name: "pedido_en_camino",
+    body: "Hola {{1}}, tu pedido de {{2}} con guía {{3}} ya está en camino. Te avisaremos cuando llegue.",
+    examples: ["Ana", "Mega Red", "1800456789"],
+  },
+  {
+    kind: "retiro",
+    name: "pedido_en_agencia",
+    body: "Hola {{1}}, tu pedido de {{2}} con guía {{3}} ya llegó a {{4}}. Acércate con tu cédula y el valor a pagar para retirarlo.",
+    examples: ["Ana", "Mega Red", "1800456789", "Servientrega Ambato Centro"],
+  },
+  {
+    kind: "recordatorio",
+    name: "recordatorio_retiro",
+    body: "Hola {{1}}, te recordamos que tu pedido de {{2}} con guía {{3}} te espera en {{4}}. Retíralo pronto para que no sea devuelto.",
+    examples: ["Ana", "Mega Red", "1800456789", "Servientrega Ambato Centro"],
+  },
+  {
+    kind: "entregado",
+    name: "pedido_entregado",
+    body: "Hola {{1}}, tu pedido de {{2}} con guía {{3}} fue entregado. ¡Gracias por tu compra! Si tienes alguna duda, responde a este mensaje.",
+    examples: ["Ana", "Mega Red", "1800456789"],
+  },
+  {
+    kind: "novedad",
+    name: "pedido_novedad",
+    body: "Hola {{1}}, tu pedido de {{2}} con guía {{3}} tiene una novedad en la entrega. Responde a este mensaje para ayudarte a solucionarlo.",
+    examples: ["Ana", "Mega Red", "1800456789"],
+  },
+];
+
 export const noticeEventSchema = z.object({
   enabled: z.boolean().default(false),
   /** Texto propio (vacío = el texto sugerido). */
