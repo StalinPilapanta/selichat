@@ -28,6 +28,9 @@ export function LegalPage({
         <Link href="/privacidad" className="hover:underline">
           Política de privacidad
         </Link>
+        <Link href="/terminos" className="hover:underline">
+          Términos del servicio
+        </Link>
         <Link href="/eliminacion-de-datos" className="hover:underline">
           Eliminación de datos
         </Link>
