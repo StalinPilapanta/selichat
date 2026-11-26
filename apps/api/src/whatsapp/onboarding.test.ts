@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoSetup, discover } from "./onboarding.js";
+import { addNumber, autoSetup, discover, splitPhone, verifyAndRegister } from "./onboarding.js";
 
 const TOKEN = "EAAG-token-tienda-123456789";
 const APP_ID = "111";
@@ -86,6 +86,8 @@ describe("discover", () => {
     const m = fakeMeta(happy);
     const d = await discover(TOKEN, SECRET, m.opts);
     expect(d.app).toEqual({ id: APP_ID, name: "App Tienda" });
+    expect(d.accounts).toEqual([{ id: "W1", name: "Cuenta Tienda" }]);
+    expect(d.warnings).toEqual([]);
     expect(d.token.permanent).toBe(true);
     expect(d.missingScopes).toEqual([]);
     expect(d.numbers).toEqual([
@@ -132,6 +134,7 @@ describe("discover", () => {
     expect(d.token.permanent).toBe(false);
     expect(d.token.expiresAt).toBe(new Date(1_900_000_000 * 1000).toISOString());
     expect(d.missingScopes).toEqual(["whatsapp_business_messaging"]);
+    expect(d.warnings.join(" ")).toContain("usuario del sistema");
     expect(d.numbers.map((n) => n.phoneNumberId)).toEqual(["P1"]);
   });
 });
@@ -210,5 +213,150 @@ describe("autoSetup", () => {
     const r = await autoSetup(ch, m.opts);
     expect(r.appWebhook.ok).toBe(false);
     expect(r.ready).toBe(false);
+  });
+});
+
+describe("splitPhone", () => {
+  it("acepta el número local, con + o con el código pegado", () => {
+    const ec = { cc: "593", number: "963268008" };
+    expect(splitPhone("593", "0963268008")).toEqual(ec);
+    expect(splitPhone("593", "963268008")).toEqual(ec);
+    expect(splitPhone("+593", "+593 96 326 8008")).toEqual(ec);
+    expect(splitPhone("593", "593963268008")).toEqual(ec);
+  });
+
+  it("rechaza números cortos o con otro código de país", () => {
+    expect(splitPhone("593", "12345")).toBeNull();
+    expect(splitPhone("593", "+57 300 123 4567")).toBeNull();
+  });
+});
+
+describe("addNumber", () => {
+  const input = {
+    wabaId: "W1",
+    cc: "593",
+    phone: "0963268008",
+    displayName: "Tienda Uno",
+    method: "SMS" as const,
+  };
+
+  it("agrega el número a la cuenta y manda el código por SMS", async () => {
+    const m = fakeMeta({
+      ...happy,
+      "POST W1/phone_numbers": () => ({ id: "P9" }),
+      "POST P9/request_code": () => ({ success: true }),
+    });
+    const r = await addNumber(TOKEN, input, m.opts);
+    expect(r).toEqual({
+      phoneNumberId: "P9",
+      displayPhone: "+593 963268008",
+      alreadyVerified: false,
+      alreadyRegistered: false,
+    });
+    expect(m.calls.find((c) => c.url === "W1/phone_numbers" && c.method === "POST")?.body).toEqual({
+      cc: "593",
+      phone_number: "963268008",
+      verified_name: "Tienda Uno",
+    });
+    expect(m.calls.find((c) => c.url === "P9/request_code")?.body).toEqual({
+      code_method: "SMS",
+      language: "es",
+    });
+  });
+
+  it("reintento: reutiliza el número que ya está en la cuenta en vez de duplicarlo", async () => {
+    const m = fakeMeta({
+      ...happy,
+      "GET W1/phone_numbers": () => ({
+        data: [
+          {
+            id: "P9",
+            display_phone_number: "+593 96 326 8008",
+            verified_name: "Tienda Uno",
+            code_verification_status: "NOT_VERIFIED",
+            status: "PENDING",
+          },
+        ],
+      }),
+      "POST P9/request_code": () => ({ success: true }),
+    });
+    const r = await addNumber(TOKEN, input, m.opts);
+    expect(r.phoneNumberId).toBe("P9");
+    expect(m.calls.some((c) => c.url === "W1/phone_numbers" && c.method === "POST")).toBe(false);
+  });
+
+  it("número ya verificado no pide código; ya registrado no hace nada", async () => {
+    const phone = (status: string, code_verification_status: string) => ({
+      ...happy,
+      "GET W1/phone_numbers": () => ({
+        data: [
+          {
+            id: "P9",
+            display_phone_number: "+593 96 326 8008",
+            verified_name: "Tienda Uno",
+            code_verification_status,
+            status,
+          },
+        ],
+      }),
+    });
+    const verified = fakeMeta(phone("PENDING", "VERIFIED"));
+    expect(await addNumber(TOKEN, input, verified.opts)).toMatchObject({
+      alreadyVerified: true,
+      alreadyRegistered: false,
+    });
+    expect(verified.calls.some((c) => c.url.endsWith("request_code"))).toBe(false);
+    const ready = fakeMeta(phone("CONNECTED", "VERIFIED"));
+    expect(await addNumber(TOKEN, input, ready.opts)).toMatchObject({ alreadyRegistered: true });
+  });
+
+  it("traduce los errores de Meta: número en uso, nombre rechazado y sin permiso", async () => {
+    const withError = (code: number, message: string) =>
+      fakeMeta({ ...happy, "POST W1/phone_numbers": () => fail(400, code, message) }).opts;
+    await expect(
+      addNumber(TOKEN, input, withError(100, "Phone number is already registered")),
+    ).rejects.toMatchObject({ code: "numero_en_uso" });
+    await expect(
+      addNumber(TOKEN, input, withError(100, "Invalid display name")),
+    ).rejects.toMatchObject({ code: "nombre_rechazado" });
+    await expect(
+      addNumber(TOKEN, input, withError(200, "Requires whatsapp_business_management")),
+    ).rejects.toMatchObject({ code: "sin_permiso" });
+  });
+});
+
+describe("verifyAndRegister", () => {
+  it("verifica el código y registra con un PIN de 6 dígitos generado", async () => {
+    const m = fakeMeta({
+      "POST P9/verify_code": () => ({ success: true }),
+      "POST P9/register": () => ({ success: true }),
+    });
+    const { pin } = await verifyAndRegister(TOKEN, "P9", "123 456", m.opts);
+    expect(pin).toMatch(/^\d{6}$/);
+    expect(m.calls.find((c) => c.url === "P9/verify_code")?.body).toEqual({ code: "123456" });
+    expect(m.calls.find((c) => c.url === "P9/register")?.body).toEqual({
+      messaging_product: "whatsapp",
+      pin,
+    });
+  });
+
+  it("código incorrecto no intenta registrar", async () => {
+    const m = fakeMeta({
+      "POST P9/verify_code": () => fail(400, 136025, "Verify code error"),
+      "POST P9/register": () => ({ success: true }),
+    });
+    await expect(verifyAndRegister(TOKEN, "P9", "000000", m.opts)).rejects.toMatchObject({
+      code: "codigo_incorrecto",
+    });
+    expect(m.calls.some((c) => c.url === "P9/register")).toBe(false);
+  });
+
+  it("sin código (ya verificado) solo registra; si falla lo explica", async () => {
+    const m = fakeMeta({ "POST P9/register": () => fail(400, 133016, "rate limit") });
+    await expect(verifyAndRegister(TOKEN, "P9", null, m.opts)).rejects.toMatchObject({
+      code: "registro_fallido",
+      message: expect.stringContaining("demasiados intentos"),
+    });
+    expect(m.calls.some((c) => c.url === "P9/verify_code")).toBe(false);
   });
 });

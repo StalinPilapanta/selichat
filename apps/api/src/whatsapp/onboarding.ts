@@ -2,6 +2,7 @@
  * Conexión manual simplificada: la tienda pega solo el token y el App Secret;
  * Selichat descubre sus números y deja el webhook configurado sin pasos en Meta.
  */
+import { randomInt } from "node:crypto";
 import { Graph, GraphError } from "./graph.js";
 
 export const REQUIRED_SCOPES = ["whatsapp_business_messaging", "whatsapp_business_management"];
@@ -19,6 +20,8 @@ export interface DiscoveredNumber {
 
 export interface Discovery {
   app: { id: string; name: string };
+  /** Cuentas de WhatsApp a las que da acceso el token (aunque no tengan números todavía). */
+  accounts: { id: string; name: string }[];
   token: { permanent: boolean; expiresAt: string | null; type: string | null };
   missingScopes: string[];
   numbers: DiscoveredNumber[];
@@ -28,7 +31,16 @@ export interface Discovery {
 
 export class OnboardingError extends Error {
   constructor(
-    public code: "token_invalido" | "app_secret_no_coincide" | "meta_error",
+    public code:
+      | "token_invalido"
+      | "app_secret_no_coincide"
+      | "sin_permiso"
+      | "numero_en_uso"
+      | "nombre_rechazado"
+      | "numero_invalido"
+      | "codigo_incorrecto"
+      | "registro_fallido"
+      | "meta_error",
     message: string,
   ) {
     super(message);
@@ -88,13 +100,20 @@ export async function discover(
     for (const w of owned) wabaIds.add(w.id);
   }
 
+  if (dbg?.type && dbg.type !== "SYSTEM_USER")
+    warnings.push(
+      "Este token es de tu usuario personal, no de un usuario del sistema: vence y se corta si cambias tu contraseña. Genera uno desde Usuarios del sistema (paso 3 de la guía).",
+    );
+
   const numbers: DiscoveredNumber[] = [];
+  const accounts: { id: string; name: string }[] = [];
   for (const wabaId of wabaIds) {
     try {
       const [waba, phones] = await Promise.all([
         user.waba(wabaId).catch(() => ({ id: wabaId, name: undefined })),
         user.wabaPhoneNumbers(wabaId),
       ]);
+      accounts.push({ id: wabaId, name: waba.name ?? wabaId });
       for (const p of phones)
         numbers.push({
           phoneNumberId: p.id,
@@ -112,11 +131,193 @@ export async function discover(
 
   return {
     app: { id: app.id, name: app.name ?? app.id },
+    accounts,
     token: { permanent: !dbg?.expires_at, expiresAt, type: dbg?.type ?? null },
     missingScopes,
     numbers,
     warnings,
   };
+}
+
+// ---------- Agregar un número nuevo desde Selichat ----------
+
+/**
+ * Separa código de país y número local. Acepta «0963268008», «963268008»,
+ * «+593 96 326 8008» o «593963268008» con cc «593». Devuelve null si no parece un número.
+ */
+export function splitPhone(cc: string, input: string): { cc: string; number: string } | null {
+  const code = cc.replace(/\D/g, "");
+  let n = input.replace(/\D/g, "");
+  if (!code || code.length > 4) return null;
+  if (input.trim().startsWith("+")) {
+    // Con «+» el número ya trae su código de país: debe ser el elegido.
+    if (!n.startsWith(code)) return null;
+    n = n.slice(code.length);
+  } else if (n.startsWith(code) && n.length > code.length + 7) {
+    n = n.slice(code.length);
+  }
+  n = n.replace(/^0+/, "");
+  if (n.length < 6 || n.length > 14) return null;
+  return { cc: code, number: n };
+}
+
+/** Traduce los errores de Meta más comunes al agregar o verificar un número. */
+function explainAddError(e: unknown): OnboardingError {
+  if (!(e instanceof GraphError)) return new OnboardingError("meta_error", (e as Error).message);
+  const m = e.message.toLowerCase();
+  const meta = ` (Meta: ${e.message})`;
+  if (e.tokenInvalid) return new OnboardingError("token_invalido", `Meta rechazó el token.${meta}`);
+  if (e.code === 10 || e.code === 200 || m.includes("permission"))
+    return new OnboardingError(
+      "sin_permiso",
+      `El token no tiene permiso sobre esta cuenta de WhatsApp. En Usuarios del sistema asígnale la cuenta con control total y vuelve a generar el token (paso 3 de la guía).${meta}`,
+    );
+  if (m.includes("display name") || m.includes("verified_name") || m.includes("verified name"))
+    return new OnboardingError(
+      "nombre_rechazado",
+      `Meta no aceptó el nombre visible. Usa el nombre de tu negocio tal como aparece en tu web o redes, sin palabras como «WhatsApp», «oficial» ni solo palabras genéricas.${meta}`,
+    );
+  if (m.includes("already") || m.includes("in use") || m.includes("registered"))
+    return new OnboardingError(
+      "numero_en_uso",
+      `Este número todavía está activo en la app de WhatsApp, en WhatsApp Business o en otra cuenta de la API. Bórralo primero (en la app: Ajustes → Cuenta → Eliminar cuenta) y vuelve a intentarlo.${meta}`,
+    );
+  if (m.includes("phone") && (m.includes("invalid") || m.includes("format")))
+    return new OnboardingError(
+      "numero_invalido",
+      `Meta no reconoce el número. Revisa el código de país y el número.${meta}`,
+    );
+  return new OnboardingError("meta_error", e.message);
+}
+
+const digits = (s: string) => s.replace(/\D/g, "");
+
+export interface AddedNumber {
+  phoneNumberId: string;
+  displayPhone: string;
+  /** Ya estaba verificado: no se mandó código y se puede registrar directo. */
+  alreadyVerified: boolean;
+  /** Ya estaba registrado y listo: no hay nada que hacer en Meta. */
+  alreadyRegistered: boolean;
+}
+
+/**
+ * Agrega el número a la cuenta de WhatsApp y manda el código.
+ * Si el número ya estaba en la cuenta (reintento), lo reutiliza en vez de duplicarlo.
+ */
+export async function addNumber(
+  accessToken: string,
+  input: {
+    wabaId: string;
+    cc: string;
+    phone: string;
+    displayName: string;
+    method: "SMS" | "VOICE";
+  },
+  o: Opts,
+): Promise<AddedNumber> {
+  const parts = splitPhone(input.cc, input.phone);
+  if (!parts)
+    throw new OnboardingError(
+      "numero_invalido",
+      "Escribe el número con su código de país, por ejemplo 593 y 0963268008.",
+    );
+  const user = graph(accessToken, o);
+  const full = parts.cc + parts.number;
+  try {
+    const existing = (await user.wabaPhoneNumbers(input.wabaId)).find(
+      (p) => digits(p.display_phone_number) === full,
+    );
+    if (existing?.status === "CONNECTED")
+      return {
+        phoneNumberId: existing.id,
+        displayPhone: existing.display_phone_number,
+        alreadyVerified: true,
+        alreadyRegistered: true,
+      };
+    if (existing?.code_verification_status === "VERIFIED")
+      return {
+        phoneNumberId: existing.id,
+        displayPhone: existing.display_phone_number,
+        alreadyVerified: true,
+        alreadyRegistered: false,
+      };
+    const id =
+      existing?.id ??
+      (await user.addPhoneNumber(input.wabaId, parts.cc, parts.number, input.displayName.trim()))
+        .id;
+    await user.requestCode(id, input.method);
+    return {
+      phoneNumberId: id,
+      displayPhone: existing?.display_phone_number ?? `+${parts.cc} ${parts.number}`,
+      alreadyVerified: false,
+      alreadyRegistered: false,
+    };
+  } catch (e) {
+    throw explainAddError(e);
+  }
+}
+
+/** Vuelve a mandar el código (p. ej. por llamada si el SMS no llegó). */
+export async function resendCode(
+  accessToken: string,
+  phoneNumberId: string,
+  method: "SMS" | "VOICE",
+  o: Opts,
+) {
+  try {
+    await graph(accessToken, o).requestCode(phoneNumberId, method);
+  } catch (e) {
+    throw explainAddError(e);
+  }
+}
+
+/** Mensaje claro para los errores típicos al registrar con PIN. */
+export function explainRegisterError(e: GraphError): string {
+  if (e.code === 133005)
+    return "El PIN no coincide: este número ya tiene verificación en dos pasos con otro PIN. Usa ese PIN o cámbialo en WhatsApp Manager → Números de teléfono → Configuración.";
+  if (e.code === 133016)
+    return "Meta bloqueó temporalmente el registro por demasiados intentos. Espera unas horas y vuelve a intentarlo.";
+  return e.message;
+}
+
+/** PIN de verificación en dos pasos que Selichat genera y guarda por la tienda. */
+export const newPin = () => String(randomInt(0, 1_000_000)).padStart(6, "0");
+
+/**
+ * Verifica el código y registra el número con un PIN nuevo.
+ * Devuelve el PIN para guardarlo con el canal.
+ */
+export async function verifyAndRegister(
+  accessToken: string,
+  phoneNumberId: string,
+  code: string | null,
+  o: Opts,
+): Promise<{ pin: string }> {
+  const user = graph(accessToken, o);
+  if (code) {
+    try {
+      await user.verifyCode(phoneNumberId, code.replace(/\D/g, ""));
+    } catch (e) {
+      if (e instanceof GraphError && !e.tokenInvalid && e.code !== 10 && e.code !== 200)
+        throw new OnboardingError(
+          "codigo_incorrecto",
+          `El código no es correcto o ya venció. Revísalo o pide uno nuevo. (Meta: ${e.message})`,
+        );
+      throw explainAddError(e);
+    }
+  }
+  const pin = newPin();
+  try {
+    await user.registerPhone(phoneNumberId, pin);
+  } catch (e) {
+    if (!(e instanceof GraphError)) throw e;
+    throw new OnboardingError(
+      "registro_fallido",
+      `El número quedó verificado, pero Meta no lo registró: ${explainRegisterError(e)}`,
+    );
+  }
+  return { pin };
 }
 
 export type StepResult = { ok: true; note?: string } | { ok: false; error: string };

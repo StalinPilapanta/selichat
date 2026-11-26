@@ -4,7 +4,7 @@ import { MessageCircle, Pencil, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
-import { api, errorMessage } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Channel = {
   id: string;
@@ -66,8 +66,10 @@ type Setup = {
   webhook: StepResult;
   ready: boolean;
 };
+type Account = { id: string; name: string };
 type Discovered = {
   app: { id: string; name: string };
+  accounts: Account[];
   token: { permanent: boolean; expiresAt: string | null; type: string | null };
   missingScopes: string[];
   warnings: string[];
@@ -88,6 +90,324 @@ const metaLink = (href: string, text: string) => (
     {text}
   </a>
 );
+// Solo páginas de inicio: los enlaces profundos de Meta fallan según la cuenta o el portafolio.
+const businessHome = metaLink("https://business.facebook.com/", "business.facebook.com");
+const developersHome = metaLink("https://developers.facebook.com/", "developers.facebook.com");
+
+/** Cómo conseguir en Meta lo que pide Selichat, con el camino desde la página de inicio. */
+function MetaGuide() {
+  return (
+    <ol className="mt-2 list-decimal space-y-3 pl-5 text-zinc-600 dark:text-zinc-400">
+      <li>
+        <b>App de Meta.</b> Entra a {developersHome} → arriba a la derecha <b>Mis apps</b>. Si ya
+        tienes una app con WhatsApp, usa esa. Si no: <b>Crear app</b> → caso de uso{" "}
+        <b>«Conectar con clientes a través de WhatsApp»</b> → vincúlala a tu portafolio comercial.
+        Si Meta te pide aceptar las <b>Condiciones para desarrolladores</b>, acéptalas: sin eso no
+        se puede registrar el número.
+      </li>
+      <li>
+        <b>Cuenta de WhatsApp.</b> Entra a {businessHome} → elige tu portafolio (arriba a la
+        izquierda) → <b>Configuración</b> (engranaje, abajo a la izquierda) → <b>Cuentas</b> →{" "}
+        <b>Cuentas de WhatsApp</b>. Si ya aparece una, listo. Si no hay ninguna, pulsa{" "}
+        <b>Agregar</b> y créala; el número lo puedes agregar después desde Selichat.
+      </li>
+      <li>
+        <b>Usuario del sistema y token.</b> En esa misma Configuración → <b>Usuarios</b> →{" "}
+        <b>Usuarios del sistema</b>:
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li>
+            <b>Agregar</b> → un nombre (p. ej. «Selichat») → rol <b>Administrador</b>. Si Meta dice
+            que no puedes crear otro administrador, es porque un portafolio sin verificar admite
+            solo uno: usa el que ya aparece en la lista. No lo borres, porque los tokens que ya
+            generó dejarían de funcionar.
+          </li>
+          <li>
+            Elige el usuario → <b>Asignar activos</b> → <b>Apps</b> → tu app → <b>control total</b>.
+            Repite con <b>Cuentas de WhatsApp</b> → tu cuenta → <b>control total</b>.
+          </li>
+          <li>
+            <b>Generar token</b> → elige tu app → vencimiento <b>«Nunca»</b> → marca{" "}
+            <code>business_management</code>, <code>whatsapp_business_messaging</code> y{" "}
+            <code>whatsapp_business_management</code> → copia el token (Meta lo muestra una sola
+            vez).
+          </li>
+        </ul>
+      </li>
+      <li>
+        <b>Clave secreta de la app.</b> En {developersHome} → <b>Mis apps</b> → tu app → menú{" "}
+        <b>Configuración de la app</b> → <b>Básica</b> → <b>Clave secreta de la app</b> →{" "}
+        <b>Mostrar</b> → cópiala.
+      </li>
+    </ol>
+  );
+}
+
+type NewNumber = {
+  phoneNumberId: string;
+  displayPhone: string;
+  wabaId: string;
+  verifiedName: string;
+  /** PIN con el que Selichat lo registró ("" si ya estaba registrado). */
+  pin: string;
+};
+
+/**
+ * Agrega un número nuevo sin entrar a Meta: lo crea en la cuenta de WhatsApp,
+ * manda el código, lo verifica y lo registra con un PIN que genera Selichat.
+ */
+function AddNumber({
+  accessToken,
+  accounts,
+  onDone,
+  onCancel,
+}: {
+  accessToken: string;
+  accounts: Account[];
+  onDone: (n: NewNumber) => void;
+  onCancel?: () => void;
+}) {
+  const [f, setF] = useState({
+    wabaId: accounts[0]?.id ?? "",
+    cc: "593",
+    phone: "",
+    displayName: "",
+    method: "SMS" as "SMS" | "VOICE",
+  });
+  const [sent, setSent] = useState<{
+    phoneNumberId: string;
+    displayPhone: string;
+    needsCode: boolean;
+  } | null>(null);
+  const [code, setCode] = useState("");
+  const [info, setInfo] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+    } catch (err) {
+      // El código ya se verificó y falló solo el registro: el siguiente intento no lo pide.
+      if (err instanceof ApiError && err.code === "whatsapp_registro_fallido")
+        setSent((x) => x && { ...x, needsCode: false });
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const send = (e: React.FormEvent) => {
+    e.preventDefault();
+    return run(async () => {
+      const r = await api<{
+        phoneNumberId: string;
+        displayPhone: string;
+        alreadyVerified: boolean;
+        alreadyRegistered: boolean;
+      }>("/api/channels/add-number", { method: "POST", body: { accessToken, ...f } });
+      if (r.alreadyRegistered) {
+        onDone({ ...r, wabaId: f.wabaId, verifiedName: f.displayName, pin: "" });
+        return;
+      }
+      setSent({ ...r, needsCode: !r.alreadyVerified });
+      setInfo(
+        r.alreadyVerified
+          ? "Este número ya estaba verificado: solo falta registrarlo."
+          : `Meta mandó un código ${f.method === "SMS" ? "por SMS" : "por llamada"} al ${r.displayPhone}.`,
+      );
+    });
+  };
+
+  const resend = (method: "SMS" | "VOICE") =>
+    run(async () => {
+      if (!sent) return;
+      await api("/api/channels/resend-code", {
+        method: "POST",
+        body: { accessToken, phoneNumberId: sent.phoneNumberId, method },
+      });
+      setInfo(
+        method === "SMS" ? "Te mandamos otro SMS." : "Meta te va a llamar para dictarte el código.",
+      );
+    });
+
+  const verify = () =>
+    run(async () => {
+      if (!sent) return;
+      const r = await api<{ pin: string }>("/api/channels/verify-number", {
+        method: "POST",
+        body: {
+          accessToken,
+          phoneNumberId: sent.phoneNumberId,
+          code: sent.needsCode ? code : null,
+        },
+      });
+      onDone({
+        phoneNumberId: sent.phoneNumberId,
+        displayPhone: sent.displayPhone,
+        wabaId: f.wabaId,
+        verifiedName: f.displayName,
+        pin: r.pin,
+      });
+    });
+
+  const box =
+    "space-y-3 rounded-lg border border-brand-200 bg-brand-50/50 p-4 text-sm dark:border-brand-900 dark:bg-brand-950/30";
+
+  if (sent)
+    return (
+      <div className={box}>
+        <div className="font-medium">Verifica el número {sent.displayPhone}</div>
+        {info && <p className="text-zinc-600 dark:text-zinc-400">{info}</p>}
+        {sent.needsCode && (
+          <input
+            className="input max-w-[10rem] font-mono tracking-widest"
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="123456"
+            aria-label="Código de verificación"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+          />
+        )}
+        <ErrorText>{error}</ErrorText>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || (sent.needsCode && code.length !== 6)}
+            onClick={verify}
+          >
+            {busy ? "Registrando en Meta…" : "Verificar y registrar"}
+          </button>
+          {sent.needsCode && (
+            <>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={busy}
+                onClick={() => resend("SMS")}
+              >
+                Reenviar SMS
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={busy}
+                onClick={() => resend("VOICE")}
+              >
+                Mejor llámame
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={busy}
+            onClick={() => {
+              setSent(null);
+              setCode("");
+              setError("");
+            }}
+          >
+            Cambiar número
+          </button>
+        </div>
+      </div>
+    );
+
+  return (
+    <form onSubmit={send} className={box}>
+      <div className="font-medium">Agregar un número nuevo</div>
+      <p className="text-zinc-600 dark:text-zinc-400">
+        El número <b>no puede estar activo</b> en la app de WhatsApp ni en WhatsApp Business. Si lo
+        está, bórralo primero desde el teléfono: Ajustes → Cuenta → Eliminar cuenta. Debe poder
+        recibir un SMS o una llamada.
+      </p>
+      {accounts.length > 1 && (
+        <label className="block max-w-sm">
+          <span className="label">Cuenta de WhatsApp</span>
+          <select
+            className="input"
+            value={f.wabaId}
+            onChange={(e) => setF({ ...f, wabaId: e.target.value })}
+          >
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <label className="block w-24">
+          <span className="label">País</span>
+          <input
+            className="input font-mono"
+            required
+            inputMode="numeric"
+            value={f.cc}
+            onChange={(e) => setF({ ...f, cc: e.target.value.replace(/[^\d+]/g, "") })}
+          />
+        </label>
+        <label className="block min-w-[12rem] flex-1">
+          <span className="label">Número</span>
+          <input
+            className="input font-mono"
+            required
+            inputMode="tel"
+            placeholder="0963268008"
+            value={f.phone}
+            onChange={(e) => setF({ ...f, phone: e.target.value })}
+          />
+        </label>
+      </div>
+      <label className="block">
+        <span className="label">Nombre que verán tus clientes</span>
+        <input
+          className="input"
+          required
+          minLength={3}
+          maxLength={120}
+          placeholder="Mi Tienda EC"
+          value={f.displayName}
+          onChange={(e) => setF({ ...f, displayName: e.target.value })}
+        />
+        <span className="mt-1 block text-xs text-zinc-500">
+          Usa el nombre de tu negocio como aparece en tu web o redes. Meta lo revisa aparte; no uses
+          «WhatsApp», «oficial» ni solo palabras genéricas.
+        </span>
+      </label>
+      <fieldset className="flex gap-4">
+        <legend className="label">Enviar el código por</legend>
+        {(["SMS", "VOICE"] as const).map((m) => (
+          <label key={m} className="flex items-center gap-1">
+            <input
+              type="radio"
+              name="metodo"
+              checked={f.method === m}
+              onChange={() => setF({ ...f, method: m })}
+            />
+            {m === "SMS" ? "SMS" : "Llamada"}
+          </label>
+        ))}
+      </fieldset>
+      <ErrorText>{error}</ErrorText>
+      <div className="flex gap-2">
+        <button type="submit" className="btn" disabled={busy || !f.wabaId}>
+          {busy ? "Agregando en Meta…" : "Enviar código"}
+        </button>
+        {onCancel && (
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancelar
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
 
 /** Lista de verificación del resultado de la configuración automática. */
 function SetupChecklist({ setup }: { setup: Setup }) {
@@ -131,8 +451,41 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [pin, setPin] = useState("");
   const [registered, setRegistered] = useState("");
+  const [adding, setAdding] = useState(false);
+  /** PIN con el que se registró cada número en esta conexión (se guarda cifrado con el canal). */
+  const [pins, setPins] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  function numberAdded(n: NewNumber) {
+    setFound(
+      (f) =>
+        f && {
+          ...f,
+          numbers: [
+            ...f.numbers.filter((x) => x.phoneNumberId !== n.phoneNumberId),
+            {
+              phoneNumberId: n.phoneNumberId,
+              wabaId: n.wabaId,
+              wabaName: f.accounts.find((a) => a.id === n.wabaId)?.name ?? n.wabaId,
+              displayPhone: n.displayPhone,
+              verifiedName: n.verifiedName,
+              qualityRating: null,
+              status: "CONNECTED",
+              alreadyConnected: false,
+            },
+          ],
+        },
+    );
+    setPick(n.phoneNumberId);
+    if (n.pin) setPins((p) => ({ ...p, [n.phoneNumberId]: n.pin }));
+    setAdding(false);
+    setRegistered(
+      n.pin
+        ? `Número registrado en Meta con el PIN ${n.pin} (verificación en dos pasos). Selichat lo guarda cifrado; anótalo por si Meta te lo pide.`
+        : "Este número ya estaba registrado en Meta.",
+    );
+  }
 
   async function registerPicked() {
     setBusy(true);
@@ -154,6 +507,7 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
       setRegistered(
         "Número registrado en Meta. Guarda tu PIN: Meta lo pide si vuelves a registrarlo.",
       );
+      setPins((p) => ({ ...p, [pick]: pin }));
       setPin("");
     } catch (err) {
       setError(errorMessage(err));
@@ -186,7 +540,13 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
     try {
       const ch = await api<{ setup: Setup }>("/api/channels", {
         method: "POST",
-        body: { name, phoneNumberId: n.phoneNumberId, wabaId: n.wabaId, ...creds },
+        body: {
+          name,
+          phoneNumberId: n.phoneNumberId,
+          wabaId: n.wabaId,
+          ...creds,
+          pin: pins[n.phoneNumberId],
+        },
       });
       setSetup(ch.setup);
     } catch (err) {
@@ -202,12 +562,18 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
       <div className="card space-y-4">
         <div className="font-medium">3. Número conectado</div>
         <SetupChecklist setup={setup} />
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          <b>Último paso en Meta: agrega un método de pago.</b> Sin tarjeta, WhatsApp solo deja
-          responder a clientes que te escriben (ventana de 24 h) y no podrás enviar plantillas
-          (avisos de pedidos, recordatorios). Agrégala en{" "}
-          {metaLink("https://business.facebook.com/billing_hub/accounts", "Facturación y pagos")} →
-          tu cuenta de WhatsApp → «Añadir método de pago».
+        <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <p>
+            <b>Publica tu app si sigue en modo desarrollo.</b> En desarrollo Meta puede no enviar
+            los mensajes reales de tus clientes. Entra a {developersHome} → <b>Mis apps</b> → tu app
+            → <b>Publicar</b> (en el panel de la app).
+          </p>
+          <p>
+            <b>Agrega un método de pago.</b> Sin tarjeta, WhatsApp solo deja responder a clientes
+            que te escriben (ventana de 24 h) y no podrás enviar plantillas (avisos de pedidos,
+            recordatorios). Entra a {businessHome} → tu portafolio → <b>Configuración</b> →{" "}
+            <b>Facturación y pagos</b> → tu cuenta de WhatsApp → <b>Añadir método de pago</b>.
+          </p>
         </div>
         <button type="button" className="btn" onClick={onDone}>
           Continuar
@@ -245,12 +611,25 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
             {w}
           </p>
         ))}
-        {found.numbers.length === 0 ? (
-          <ErrorText>
-            El token no da acceso a ningún número. Al generar el token, asígnale al usuario del
-            sistema tu cuenta de WhatsApp Business con control total.
-          </ErrorText>
-        ) : (
+        {found.accounts.length === 0 && (
+          <div className="space-y-2">
+            <ErrorText>
+              El token no da acceso a ninguna cuenta de WhatsApp. Asígnale al usuario del sistema tu
+              cuenta de WhatsApp con control total y vuelve a generar el token (pasos 2 y 3).
+            </ErrorText>
+            <details className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+              <summary className="cursor-pointer font-medium">Ver la guía paso a paso</summary>
+              <MetaGuide />
+            </details>
+          </div>
+        )}
+        {found.accounts.length > 0 && found.numbers.length === 0 && (
+          <p className="text-sm text-zinc-500">
+            Tu cuenta de WhatsApp todavía no tiene números. Agrega uno aquí mismo: Selichat te manda
+            el código y lo deja registrado.
+          </p>
+        )}
+        {found.numbers.length > 0 && (
           <div className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
             {found.numbers.map((n) => (
               <label
@@ -279,6 +658,19 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
             ))}
           </div>
         )}
+        {found.accounts.length > 0 &&
+          (adding || found.numbers.length === 0 ? (
+            <AddNumber
+              accessToken={creds.accessToken}
+              accounts={found.accounts}
+              onDone={numberAdded}
+              onCancel={found.numbers.length ? () => setAdding(false) : undefined}
+            />
+          ) : (
+            <button type="button" className="btn-ghost" onClick={() => setAdding(true)}>
+              + Agregar un número nuevo
+            </button>
+          ))}
         {(() => {
           const sel = found.numbers.find((n) => n.phoneNumberId === pick);
           if (!sel?.status || sel.status === "CONNECTED") return null;
@@ -344,34 +736,14 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
     <form onSubmit={find} className="card space-y-4">
       <div className="font-medium">1. Conecta tu app de Meta</div>
       <p className="text-sm text-zinc-500">
-        Solo necesitas dos datos. Selichat encuentra tus números y configura el webhook por ti.
+        Solo necesitas dos datos. Selichat encuentra tus números y configura el webhook por ti. Si
+        todavía no tienes el número en WhatsApp, lo agregas y verificas aquí mismo en el paso 2.
       </p>
       <details className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
         <summary className="cursor-pointer font-medium">
           ¿Dónde los consigo? (guía paso a paso)
         </summary>
-        <ol className="mt-2 list-decimal space-y-2 pl-5 text-zinc-600 dark:text-zinc-400">
-          <li>
-            En {metaLink("https://developers.facebook.com/apps/creation/", "Meta for Developers")}{" "}
-            crea una app, elige el caso de uso <b>«Conectar con clientes a través de WhatsApp»</b> y
-            vincúlala a tu portafolio comercial.
-          </li>
-          <li>
-            En{" "}
-            {metaLink(
-              "https://business.facebook.com/latest/settings/system_users",
-              "Usuarios del sistema",
-            )}{" "}
-            crea un usuario <b>administrador</b>. Pulsa «Asignar activos» → Cuentas de WhatsApp → tu
-            cuenta → <b>control total</b>. Luego «Generar token»: elige tu app, vencimiento{" "}
-            <b>«Nunca»</b> y marca <code>whatsapp_business_messaging</code> y{" "}
-            <code>whatsapp_business_management</code>. Copia el token.
-          </li>
-          <li>
-            En tu app → Configuración de la app → <b>Básica</b>, pulsa «Mostrar» en{" "}
-            <b>Clave secreta de la app</b> y cópiala.
-          </li>
-        </ol>
+        <MetaGuide />
       </details>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block sm:col-span-2">

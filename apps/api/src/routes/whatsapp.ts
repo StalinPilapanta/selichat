@@ -2,13 +2,21 @@ import { randomBytes } from "node:crypto";
 import { type Database, schema, withTenant } from "@chatea/db";
 import { decryptSecret, encryptSecret } from "@chatea/shared";
 import { and, eq, inArray } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
 import { requireTenant } from "../plugins/tenant.js";
 import type { RealtimeBus } from "../realtime.js";
 import { Graph, GraphError } from "../whatsapp/graph.js";
-import { autoSetup, discover, OnboardingError } from "../whatsapp/onboarding.js";
+import {
+  addNumber,
+  autoSetup,
+  discover,
+  explainRegisterError,
+  OnboardingError,
+  resendCode,
+  verifyAndRegister,
+} from "../whatsapp/onboarding.js";
 import { parseWebhook } from "../whatsapp/parse.js";
 import { type Channel, graphFor, ingestWebhook, type WaConfig } from "../whatsapp/service.js";
 import { verifySignature } from "../whatsapp/signature.js";
@@ -33,6 +41,7 @@ const channelBody = z.object({
     .regex(/^[a-f0-9]{32}$/i, "App Secret inválido (32 caracteres hex)"),
 });
 const channelPatch = channelBody.partial().omit({ phoneNumberId: true });
+const codeMethod = z.enum(["SMS", "VOICE"]).default("SMS");
 
 const templateBody = z.object({
   name: z.string().regex(/^[a-z0-9_]{1,512}$/, "Solo minúsculas, números y guion bajo"),
@@ -239,15 +248,89 @@ export async function whatsappRoutes(
       return null;
     } catch (e) {
       if (!(e instanceof GraphError)) throw e;
-      const detail =
-        e.code === 133005
-          ? "El PIN no coincide: este número ya tiene verificación en dos pasos con otro PIN. Usa ese PIN o cámbialo en WhatsApp Manager → Números de teléfono → Configuración."
-          : e.code === 133016
-            ? "Meta bloqueó temporalmente el registro por demasiados intentos. Espera unas horas y vuelve a intentarlo."
-            : e.message;
-      return { error: "whatsapp_registro_fallido", detail };
+      return { error: "whatsapp_registro_fallido", detail: explainRegisterError(e) };
     }
   };
+  const onboardingFailed = (e: unknown, reply: FastifyReply) => {
+    if (e instanceof OnboardingError)
+      return reply.code(400).send({ error: `whatsapp_${e.code}`, detail: e.message });
+    throw e;
+  };
+
+  /** Número nuevo, paso A: lo agrega a la cuenta de WhatsApp y manda el código. */
+  app.post("/api/channels/add-number", { preHandler: admins }, async (req, reply) => {
+    const body = z
+      .object({
+        accessToken: channelBody.shape.accessToken,
+        wabaId: channelBody.shape.wabaId,
+        cc: z
+          .string()
+          .trim()
+          .regex(/^\+?\d{1,4}$/, "Código de país inválido"),
+        phone: z.string().trim().min(6).max(30),
+        displayName: z.string().trim().min(3).max(120),
+        method: codeMethod,
+      })
+      .safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+    try {
+      const { accessToken, ...input } = body.data;
+      return await addNumber(accessToken, input, graphOpts);
+    } catch (e) {
+      return onboardingFailed(e, reply);
+    }
+  });
+
+  /** Número nuevo: vuelve a mandar el código (SMS o llamada). */
+  app.post("/api/channels/resend-code", { preHandler: admins }, async (req, reply) => {
+    const body = z
+      .object({
+        accessToken: channelBody.shape.accessToken,
+        phoneNumberId: channelBody.shape.phoneNumberId,
+        method: codeMethod,
+      })
+      .safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+    try {
+      await resendCode(body.data.accessToken, body.data.phoneNumberId, body.data.method, graphOpts);
+      return { ok: true };
+    } catch (e) {
+      return onboardingFailed(e, reply);
+    }
+  });
+
+  /**
+   * Número nuevo, paso B: verifica el código y lo registra con un PIN que genera Selichat.
+   * Sin código (número ya verificado) solo registra.
+   */
+  app.post("/api/channels/verify-number", { preHandler: admins }, async (req, reply) => {
+    const body = z
+      .object({
+        accessToken: channelBody.shape.accessToken,
+        phoneNumberId: channelBody.shape.phoneNumberId,
+        code: z
+          .string()
+          .trim()
+          .regex(/^[\d\s-]{4,10}$/, "El código son 6 dígitos")
+          .nullable()
+          .default(null),
+      })
+      .safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+    try {
+      return await verifyAndRegister(
+        body.data.accessToken,
+        body.data.phoneNumberId,
+        body.data.code,
+        graphOpts,
+      );
+    } catch (e) {
+      return onboardingFailed(e, reply);
+    }
+  });
 
   /** En la conexión (antes de crear el canal): registra un número «pendiente». */
   app.post("/api/channels/register-number", { preHandler: admins }, async (req, reply) => {
@@ -270,24 +353,32 @@ export async function whatsappRoutes(
     { preHandler: admins },
     async (req, reply) => {
       if (!isUuid(req.params.id)) return reply.code(404).send();
-      const body = z.object({ pin: pinField }).safeParse(req.body);
+      const body = z.object({ pin: pinField.optional() }).safeParse(req.body ?? {});
       if (!body.success)
         return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
       const [ch] = await withTenant(db, req.ctx.tenantId, (tx) =>
         tx.select().from(channels).where(eq(channels.id, req.params.id)),
       );
       if (!ch) return reply.code(404).send();
+      // Sin PIN escrito: el que Selichat guardó al registrar el número.
+      const pin =
+        body.data.pin ??
+        (ch.twoStepPinEnc ? decryptSecret(ch.twoStepPinEnc, wa.encryptionKey) : null);
+      if (!pin)
+        return reply
+          .code(400)
+          .send({ error: "datos_invalidos", detail: "Escribe el PIN de 6 dígitos del número." });
       const err = await registerNumber(
         decryptSecret(ch.accessTokenEnc, wa.encryptionKey),
         ch.phoneNumberId,
-        body.data.pin,
+        pin,
       );
       return err ? reply.code(400).send(err) : { ok: true };
     },
   );
 
   app.post("/api/channels", { preHandler: admins }, async (req, reply) => {
-    const body = channelBody.safeParse(req.body);
+    const body = channelBody.extend({ pin: pinField.optional() }).safeParse(req.body);
     if (!body.success)
       return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
     const [taken] = await db
@@ -322,6 +413,7 @@ export async function whatsappRoutes(
           verifiedName: info.verified_name ?? "",
           accessTokenEnc: draft.accessTokenEnc,
           appSecretEnc: draft.appSecretEnc,
+          twoStepPinEnc: body.data.pin ? encryptSecret(body.data.pin, wa.encryptionKey) : null,
           verifyToken: randomBytes(18).toString("base64url"),
           status: "activo",
         })

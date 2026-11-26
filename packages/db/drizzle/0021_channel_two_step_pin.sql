@@ -1,0 +1,1 @@
+ALTER TABLE "channels" ADD COLUMN "two_step_pin_enc" text;

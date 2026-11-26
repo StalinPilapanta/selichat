@@ -148,6 +148,13 @@
       "when": 1795632858794,
       "tag": "0020_tenant_website",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795733117186,
+      "tag": "0021_channel_two_step_pin",
+      "breakpoints": true
     }
   ]
 }

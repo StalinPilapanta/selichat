@@ -127,6 +127,28 @@ export class Graph {
     return r.data;
   }
 
+  /** Agrega un número nuevo a la WABA (queda sin verificar hasta `verifyCode`). */
+  addPhoneNumber(wabaId: string, cc: string, phoneNumber: string, verifiedName: string) {
+    return this.call<{ id: string }>("POST", `${wabaId}/phone_numbers`, {
+      cc,
+      phone_number: phoneNumber,
+      verified_name: verifiedName,
+    });
+  }
+
+  /** Pide a Meta que mande el código de verificación por SMS o llamada. */
+  requestCode(phoneNumberId: string, method: "SMS" | "VOICE", language = "es") {
+    return this.call<{ success: boolean }>("POST", `${phoneNumberId}/request_code`, {
+      code_method: method,
+      language,
+    });
+  }
+
+  /** Confirma el código que recibió el dueño del número. */
+  verifyCode(phoneNumberId: string, code: string) {
+    return this.call<{ success: boolean }>("POST", `${phoneNumberId}/verify_code`, { code });
+  }
+
   /**
    * Registra el número en la Cloud API (sin esto queda «pendiente» y no envía).
    * El PIN es la verificación en dos pasos: si el número ya tenía uno, debe ser el mismo.

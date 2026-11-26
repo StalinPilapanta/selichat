@@ -27,6 +27,8 @@ export const channels = pgTable(
     verifiedName: text("verified_name").notNull().default(""),
     accessTokenEnc: text("access_token_enc").notNull(),
     appSecretEnc: text("app_secret_enc").notNull(),
+    /** PIN de verificación en dos pasos (cifrado) cuando Selichat registró el número. */
+    twoStepPinEnc: text("two_step_pin_enc"),
     /** Token que se pega en Meta para verificar el webhook (no es secreto crítico). */
     verifyToken: text("verify_token").notNull(),
     status: text("status").notNull().default("pendiente"), // pendiente | activo | error

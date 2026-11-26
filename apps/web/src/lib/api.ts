@@ -56,6 +56,12 @@ const MESSAGES: Record<string, string> = {
   whatsapp_token_invalido: "Meta rechazó el token de acceso.",
   whatsapp_app_secret_no_coincide: "El App Secret no es el de la app del token.",
   whatsapp_meta_error: "Meta devolvió un error:",
+  whatsapp_sin_permiso: "El token no tiene permiso sobre esa cuenta de WhatsApp.",
+  whatsapp_numero_en_uso: "Ese número sigue activo en WhatsApp o en otra cuenta.",
+  whatsapp_nombre_rechazado: "Meta no aceptó el nombre visible.",
+  whatsapp_numero_invalido: "Meta no reconoce el número.",
+  whatsapp_codigo_incorrecto: "El código no es correcto o venció.",
+  whatsapp_registro_fallido: "Meta no registró el número.",
   numero_ya_conectado: "Ese número ya está conectado (en esta u otra tienda).",
   ventana_cerrada:
     "Pasaron más de 24 h desde el último mensaje del cliente: solo puedes enviar una plantilla.",
