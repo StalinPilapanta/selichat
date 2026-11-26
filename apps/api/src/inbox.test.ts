@@ -34,6 +34,13 @@ function fakeMeta() {
         display_phone_number: "+593 99 000 1111",
         verified_name: "VitashopEc",
       });
+    if (url.endsWith("/register"))
+      return body.pin === "000000"
+        ? Response.json(
+            { error: { message: "Two step verification PIN Mismatch", code: 133005 } },
+            { status: 400 },
+          )
+        : Response.json({ success: true });
     if (url.endsWith("/messages")) {
       if (body.status === "read") return Response.json({ success: true });
       return Response.json({ messages: [{ id: `wamid.OUT${++counter}` }] });
@@ -157,6 +164,33 @@ describe.skipIf(!hasDb)("WhatsApp + bandeja", () => {
       appSecret: APP_SECRET,
     });
     expect(dup.statusCode).toBe(409);
+  });
+
+  it("registra un número pendiente con PIN y explica el PIN equivocado", async () => {
+    const ok = await h.call(owner.cookie, "POST", "/api/channels/register-number", {
+      accessToken: TOKEN,
+      phoneNumberId: "123456789",
+      pin: "135790",
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(meta.sent.at(-1)).toMatchObject({
+      url: expect.stringMatching(/\/123456789\/register$/),
+      body: { messaging_product: "whatsapp", pin: "135790" },
+    });
+
+    const corto = await h.call(owner.cookie, "POST", "/api/channels/register-number", {
+      accessToken: TOKEN,
+      phoneNumberId: "123456789",
+      pin: "12",
+    });
+    expect(corto.statusCode).toBe(400);
+
+    const malo = await h.call(owner.cookie, "POST", `/api/channels/${channel.id}/register`, {
+      pin: "000000",
+    });
+    expect(malo.statusCode).toBe(400);
+    expect(malo.json()).toMatchObject({ error: "whatsapp_registro_fallido" });
+    expect(malo.json().detail).toContain("PIN no coincide");
   });
 
   it("verificación del webhook (hub.challenge)", async () => {

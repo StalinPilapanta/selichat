@@ -129,8 +129,38 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
   const [pick, setPick] = useState("");
   const [name, setName] = useState("WhatsApp principal");
   const [setup, setSetup] = useState<Setup | null>(null);
+  const [pin, setPin] = useState("");
+  const [registered, setRegistered] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  async function registerPicked() {
+    setBusy(true);
+    setError("");
+    try {
+      await api("/api/channels/register-number", {
+        method: "POST",
+        body: { accessToken: creds.accessToken, phoneNumberId: pick, pin },
+      });
+      setFound(
+        (f) =>
+          f && {
+            ...f,
+            numbers: f.numbers.map((n) =>
+              n.phoneNumberId === pick ? { ...n, status: "CONNECTED" } : n,
+            ),
+          },
+      );
+      setRegistered(
+        "Número registrado en Meta. Guarda tu PIN: Meta lo pide si vuelves a registrarlo.",
+      );
+      setPin("");
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function find(e: React.FormEvent) {
     e.preventDefault();
@@ -172,6 +202,13 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
       <div className="card space-y-4">
         <div className="font-medium">3. Número conectado</div>
         <SetupChecklist setup={setup} />
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <b>Último paso en Meta: agrega un método de pago.</b> Sin tarjeta, WhatsApp solo deja
+          responder a clientes que te escriben (ventana de 24 h) y no podrás enviar plantillas
+          (avisos de pedidos, recordatorios). Agrégala en{" "}
+          {metaLink("https://business.facebook.com/billing_hub/accounts", "Facturación y pagos")} →
+          tu cuenta de WhatsApp → «Añadir método de pago».
+        </div>
         <button type="button" className="btn" onClick={onDone}>
           Continuar
         </button>
@@ -242,6 +279,39 @@ function ConnectForm({ onDone }: { onDone: () => void }) {
             ))}
           </div>
         )}
+        {(() => {
+          const sel = found.numbers.find((n) => n.phoneNumberId === pick);
+          if (!sel?.status || sel.status === "CONNECTED") return null;
+          return (
+            <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/40">
+              <div className="font-medium">Este número aún no está registrado en Meta</div>
+              <p className="text-zinc-600 dark:text-zinc-400">
+                Mientras no se registre, no puede enviar ni recibir mensajes. Elige un PIN de 6
+                dígitos (verificación en dos pasos). Si el número ya tenía un PIN, usa ese mismo.
+              </p>
+              <div className="flex flex-wrap items-end gap-2">
+                <input
+                  className="input max-w-[10rem] font-mono tracking-widest"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  aria-label="PIN de 6 dígitos"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || pin.length !== 6}
+                  onClick={registerPicked}
+                >
+                  {busy ? "Registrando…" : "Registrar número"}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+        {registered && <p className="text-sm text-brand-700 dark:text-brand-400">{registered}</p>}
         <label className="block max-w-sm">
           <span className="label">Nombre interno</span>
           <input
@@ -707,6 +777,7 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
   const [token, setToken] = useState("");
   const [secret, setSecret] = useState("");
   const [setup, setSetup] = useState<Setup | null>(null);
+  const [pin, setPin] = useState("");
 
   async function run(fn: () => Promise<unknown>, ok: string) {
     setError("");
@@ -769,6 +840,39 @@ function ChannelCard({ ch, onChange }: { ch: Channel; onChange: () => void }) {
           </p>
           <Copy label="URL de devolución de llamada" value={ch.webhookUrl} />
           <Copy label="Token de verificación" value={ch.verifyToken} />
+        </div>
+      </details>
+
+      <details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+        <summary className="cursor-pointer text-sm font-medium">
+          ¿El número aparece «pendiente» en Meta? Regístralo con PIN
+        </summary>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <input
+            className="input max-w-[10rem] font-mono tracking-widest"
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="123456"
+            aria-label="PIN de 6 dígitos"
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+          />
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={pin.length !== 6}
+            onClick={() =>
+              run(async () => {
+                await api(`/api/channels/${ch.id}/register`, { method: "POST", body: { pin } });
+                setPin("");
+              }, "Número registrado en Meta. Guarda tu PIN.")
+            }
+          >
+            Registrar número
+          </button>
+          <p className="w-full text-xs text-zinc-500">
+            PIN de 6 dígitos de verificación en dos pasos. Si el número ya tenía uno, usa ese mismo.
+          </p>
         </div>
       </details>
 

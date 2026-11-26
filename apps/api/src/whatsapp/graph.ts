@@ -127,6 +127,17 @@ export class Graph {
     return r.data;
   }
 
+  /**
+   * Registra el número en la Cloud API (sin esto queda «pendiente» y no envía).
+   * El PIN es la verificación en dos pasos: si el número ya tenía uno, debe ser el mismo.
+   */
+  registerPhone(phoneNumberId: string, pin: string) {
+    return this.call<{ success: boolean }>("POST", `${phoneNumberId}/register`, {
+      messaging_product: "whatsapp",
+      pin,
+    });
+  }
+
   /** Webhook propio de este número (gana sobre el de la WABA y el de la app). */
   setPhoneWebhook(phoneNumberId: string, callbackUrl: string, verifyToken: string) {
     return this.call<{ success: boolean }>("POST", phoneNumberId, {

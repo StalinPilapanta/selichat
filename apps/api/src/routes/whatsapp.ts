@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { Auth } from "../auth.js";
 import { requireTenant } from "../plugins/tenant.js";
 import type { RealtimeBus } from "../realtime.js";
-import { GraphError } from "../whatsapp/graph.js";
+import { Graph, GraphError } from "../whatsapp/graph.js";
 import { autoSetup, discover, OnboardingError } from "../whatsapp/onboarding.js";
 import { parseWebhook } from "../whatsapp/parse.js";
 import { type Channel, graphFor, ingestWebhook, type WaConfig } from "../whatsapp/service.js";
@@ -230,6 +230,61 @@ export async function whatsappRoutes(
       throw e;
     }
   });
+
+  const pinField = z.string().regex(/^\d{6}$/, "El PIN debe tener 6 dígitos");
+  /** Registra el número en Meta; traduce los errores típicos del PIN. */
+  const registerNumber = async (accessToken: string, phoneNumberId: string, pin: string) => {
+    try {
+      await new Graph({ accessToken, ...graphOpts }).registerPhone(phoneNumberId, pin);
+      return null;
+    } catch (e) {
+      if (!(e instanceof GraphError)) throw e;
+      const detail =
+        e.code === 133005
+          ? "El PIN no coincide: este número ya tiene verificación en dos pasos con otro PIN. Usa ese PIN o cámbialo en WhatsApp Manager → Números de teléfono → Configuración."
+          : e.code === 133016
+            ? "Meta bloqueó temporalmente el registro por demasiados intentos. Espera unas horas y vuelve a intentarlo."
+            : e.message;
+      return { error: "whatsapp_registro_fallido", detail };
+    }
+  };
+
+  /** En la conexión (antes de crear el canal): registra un número «pendiente». */
+  app.post("/api/channels/register-number", { preHandler: admins }, async (req, reply) => {
+    const body = z
+      .object({
+        accessToken: channelBody.shape.accessToken,
+        phoneNumberId: channelBody.shape.phoneNumberId,
+        pin: pinField,
+      })
+      .safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+    const err = await registerNumber(body.data.accessToken, body.data.phoneNumberId, body.data.pin);
+    return err ? reply.code(400).send(err) : { ok: true };
+  });
+
+  /** Lo mismo para un número ya conectado que quedó pendiente en Meta. */
+  app.post<{ Params: { id: string } }>(
+    "/api/channels/:id/register",
+    { preHandler: admins },
+    async (req, reply) => {
+      if (!isUuid(req.params.id)) return reply.code(404).send();
+      const body = z.object({ pin: pinField }).safeParse(req.body);
+      if (!body.success)
+        return reply.code(400).send({ error: "datos_invalidos", issues: body.error.issues });
+      const [ch] = await withTenant(db, req.ctx.tenantId, (tx) =>
+        tx.select().from(channels).where(eq(channels.id, req.params.id)),
+      );
+      if (!ch) return reply.code(404).send();
+      const err = await registerNumber(
+        decryptSecret(ch.accessTokenEnc, wa.encryptionKey),
+        ch.phoneNumberId,
+        body.data.pin,
+      );
+      return err ? reply.code(400).send(err) : { ok: true };
+    },
+  );
 
   app.post("/api/channels", { preHandler: admins }, async (req, reply) => {
     const body = channelBody.safeParse(req.body);
