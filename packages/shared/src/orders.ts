@@ -9,7 +9,7 @@ export const ORDER_STAGES = {
   confirmado: "Confirmado",
   guia_generada: "Guía generada",
   en_transito: "En tránsito",
-  en_oficina: "En oficina",
+  en_oficina: "En agencia",
   novedad: "Novedad",
   entregado: "Entregado",
   devolucion: "Devolución",

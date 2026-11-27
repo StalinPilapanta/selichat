@@ -12,7 +12,7 @@ import {
   ORDER_STAGE_KEYS,
   type OrderStage,
 } from "@chatea/shared";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
@@ -59,6 +59,9 @@ const isUuid = (v: string) => z.uuid().safeParse(v).success;
 const countryEnum = z.enum(Object.keys(DROPI_COUNTRIES) as [DropiCountry, ...DropiCountry[]]);
 /** Vigencia del enlace de autorización de Dropi. */
 const OAUTH_TTL = 15 * 60_000;
+/** Pedidos por consulta: el tablero trae los más recientes; la Lista, los del rango de fechas. */
+const ORDERS_LIMIT = 500;
+const ORDERS_RANGE_LIMIT = 1000;
 
 const dropiBody = z.object({
   /** Vacío = mantener el token guardado. */
@@ -410,21 +413,37 @@ export async function orderRoutes(
     updatedAt: orders.updatedAt,
   };
 
-  app.get<{ Querystring: { stage?: string } }>(
+  /**
+   * Pedidos de la tienda (los creados en Selichat; de Dropi solo se sincroniza su estado).
+   * `desde`/`hasta` (fechas ISO) acotan por fecha de creación para la vista Lista.
+   */
+  app.get<{ Querystring: { stage?: string; desde?: string; hasta?: string } }>(
     "/api/orders",
     { preHandler: anyMember },
     async (req) => {
       const stages = (req.query.stage ?? "")
         .split(",")
         .filter((s): s is OrderStage => ORDER_STAGE_KEYS.includes(s as OrderStage));
+      const dateOf = (v?: string) => {
+        const t = v ? Date.parse(v) : Number.NaN;
+        return Number.isNaN(t) ? null : new Date(t);
+      };
+      const from = dateOf(req.query.desde);
+      const to = dateOf(req.query.hasta);
       return withTenant(db, req.ctx.tenantId, (tx) =>
         tx
           .select(selectOrder)
           .from(orders)
           .leftJoin(contacts, eq(contacts.id, orders.contactId))
-          .where(stages.length ? inArray(orders.stage, stages) : undefined)
+          .where(
+            and(
+              stages.length ? inArray(orders.stage, stages) : undefined,
+              from ? gte(orders.createdAt, from) : undefined,
+              to ? lt(orders.createdAt, to) : undefined,
+            ),
+          )
           .orderBy(desc(orders.createdAt))
-          .limit(500),
+          .limit(from ? ORDERS_RANGE_LIMIT : ORDERS_LIMIT),
       );
     },
   );

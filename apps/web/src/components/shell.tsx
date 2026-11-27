@@ -1,4 +1,5 @@
 "use client";
+import { DEFAULT_BRAND_NAME } from "@chatea/shared";
 /**
  * Marco del panel: menú lateral con íconos (agrupado, contraíble), barra superior con buscador,
  * alertas y perfil; en el celular barra y cajón.
@@ -753,28 +754,32 @@ export function AppShell({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /** Nombre de la tienda: el de su personalización (Configuración → Marca) o el de la tienda. */
+  const shopName = brand.name && brand.name !== DEFAULT_BRAND_NAME ? brand.name : storeName;
+  const shopChip = (
+    <div className="flex items-center gap-2 rounded-xl bg-zinc-100 px-3 py-2 text-sm font-medium dark:bg-zinc-800">
+      {brand.logoUrl && (
+        // biome-ignore lint/performance/noImgElement: logo subido por la tienda (dominio propio)
+        <img src={brand.logoUrl} alt="" className="size-5 shrink-0 rounded-md object-contain" />
+      )}
+      <span className="truncate">{shopName}</span>
+    </div>
+  );
+
   const sidebar = (mode: "desktop" | "drawer") => {
     const small = mode === "desktop" && compact;
     return (
       <div className="flex h-full flex-col">
+        {/* Arriba siempre Selichat; debajo, la tienda con su nombre y logo personalizados. */}
         <div className={`pt-4 pb-3 ${small ? "flex justify-center px-2" : "px-3"}`}>
-          <Link href="/panel" className="inline-flex max-w-full" title={brand.name}>
-            {small ? (
-              <span className="grid size-9 place-items-center rounded-xl bg-brand-600 text-sm font-bold text-brand-ink">
-                {(brand.name || "S").slice(0, 1).toUpperCase()}
-              </span>
-            ) : (
-              <Logo className="text-lg" name={brand.name} logoUrl={brand.logoUrl} />
-            )}
+          <Link href="/panel" className="inline-flex max-w-full" title={DEFAULT_BRAND_NAME}>
+            {small ? <Logo name="" /> : <Logo className="text-lg" name={DEFAULT_BRAND_NAME} />}
           </Link>
         </div>
         {!small && (
-          <div className="px-3 pb-3">
-            {storeSwitcher ?? (
-              <div className="truncate rounded-xl bg-zinc-100 px-3 py-2 text-sm font-medium dark:bg-zinc-800">
-                {storeName}
-              </div>
-            )}
+          <div className="space-y-2 px-3 pb-3">
+            {shopChip}
+            {storeSwitcher}
           </div>
         )}
         {mode === "drawer" && (
@@ -807,10 +812,8 @@ export function AppShell({
         >
           <Menu />
         </button>
-        <Logo className="text-base" name={brand.name} logoUrl={brand.logoUrl} />
-        {brand.name !== storeName && (
-          <span className="ml-1 truncate text-sm text-zinc-500">{storeName}</span>
-        )}
+        <Logo className="text-base" name={DEFAULT_BRAND_NAME} />
+        <span className="ml-1 truncate text-sm text-zinc-500">{shopName}</span>
         <div className="ml-auto flex items-center">
           <BellMenu nav={nav} />
           <Link

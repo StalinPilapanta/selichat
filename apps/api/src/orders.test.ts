@@ -1243,6 +1243,25 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     const latest = (await h.call(s.cookie, "GET", "/api/orders/latest")).json();
     expect(latest.order.id).toBe(viaAgency.json().order.id);
 
+    // La vista Lista pide solo el rango de fechas.
+    const day = 86_400_000;
+    const inRange = (
+      await h.call(
+        s.cookie,
+        "GET",
+        `/api/orders?desde=${new Date(Date.now() - day).toISOString()}&hasta=${new Date(Date.now() + day).toISOString()}`,
+      )
+    ).json();
+    expect(inRange).toHaveLength(3);
+    const past = (
+      await h.call(
+        s.cookie,
+        "GET",
+        `/api/orders?desde=${new Date(Date.now() - 10 * day).toISOString()}&hasta=${new Date(Date.now() - 5 * day).toISOString()}`,
+      )
+    ).json();
+    expect(past).toHaveLength(0);
+
     // El Inicio los cuenta y marca lo que ya está configurado.
     const d = (await h.call(s.cookie, "GET", "/api/dashboard")).json();
     expect(d.today.orders).toBe(3);

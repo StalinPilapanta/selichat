@@ -6,7 +6,7 @@ import {
   ORDER_STAGES,
   type OrderStage,
 } from "@chatea/shared";
-import { Package, Plus, Trash2, X } from "lucide-react";
+import { KanbanSquare, List, Package, Plus, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
@@ -64,7 +64,8 @@ const COLUMNS: { title: string; stages: OrderStage[] }[] = [
   { title: "Por subir", stages: ["pendiente_subida", "error_subida", "revision"] },
   { title: "Por confirmar", stages: ["por_confirmar"] },
   { title: "Confirmado", stages: ["confirmado", "guia_generada"] },
-  { title: "En camino", stages: ["en_transito", "en_oficina"] },
+  { title: "En camino", stages: ["en_transito"] },
+  { title: "En agencia", stages: ["en_oficina"] },
   { title: "Novedad", stages: ["novedad"] },
   { title: "Entregado", stages: ["entregado"] },
   { title: "Devuelto / cancelado", stages: ["devolucion", "cancelado"] },
@@ -1137,6 +1138,292 @@ function columnTotal(list: Order[]) {
   return `${sum.toFixed(2)} ${list[0]?.currency ?? ""}`;
 }
 
+// ---------- Vista Lista ----------
+
+type Period = "hoy" | "7" | "30" | "rango";
+const PERIODS: [Exclude<Period, "rango">, string][] = [
+  ["hoy", "Hoy"],
+  ["7", "7 días"],
+  ["30", "30 días"],
+];
+/** Fecha local YYYY-MM-DD para los campos de fecha. */
+const ymd = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** Rango [desde, hasta) en hora local; «hasta» incluye el día elegido completo. */
+function rangeOf(p: Period, from: string, to: string): { desde: Date; hasta: Date } | null {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  if (p === "hoy") return { desde: start, hasta: new Date(start.getTime() + 86_400_000) };
+  if (p !== "rango") {
+    const d = new Date(start);
+    d.setDate(d.getDate() - Number(p) + 1);
+    return { desde: d, hasta: new Date(start.getTime() + 86_400_000) };
+  }
+  if (!from || !to || from > to) return null;
+  const end = new Date(`${to}T00:00:00`);
+  end.setDate(end.getDate() + 1);
+  return { desde: new Date(`${from}T00:00:00`), hasta: end };
+}
+
+/**
+ * Lista de pedidos: pestañas por estado con su contador, filtros por fecha y producto,
+ * y una fila por pedido que abre el mismo panel de detalle del tablero. Pide al servidor solo
+ * los pedidos del rango de fechas, así no se cargan todos de golpe.
+ */
+function OrdersList({
+  match,
+  version,
+  onOpen,
+}: {
+  /** Buscador y etapa que vienen de la página (los mismos del tablero). */
+  match: (o: Order) => boolean;
+  /** Cambia en cada «Actualizar» o cambio de un pedido: vuelve a pedir la lista. */
+  version: number;
+  onOpen: (id: string) => void;
+}) {
+  const [tab, setTab] = useState<string>("Todos");
+  const [period, setPeriod] = useState<Period>("30");
+  const [from, setFrom] = useState(() => ymd(new Date(Date.now() - 29 * 86_400_000)));
+  const [to, setTo] = useState(() => ymd(new Date()));
+  const [product, setProduct] = useState("");
+  const [orders, setOrders] = useState<Order[] | null>(null);
+  const [error, setError] = useState("");
+
+  const range = rangeOf(period, from, to);
+  const desde = range?.desde.toISOString();
+  const hasta = range?.hasta.toISOString();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version fuerza la recarga
+  useEffect(() => {
+    if (!desde || !hasta) return;
+    let alive = true;
+    api<Order[]>(
+      `/api/orders?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`,
+    )
+      .then((r) => {
+        if (!alive) return;
+        setOrders(r);
+        setError("");
+      })
+      .catch((e) => alive && setError(errorMessage(e)));
+    return () => {
+      alive = false;
+    };
+  }, [desde, hasta, version]);
+
+  const all = orders ?? [];
+  const productNames = [...new Set(all.flatMap((o) => o.items.map((i) => i.name)))].sort();
+  // Buscador y producto primero; las pestañas cuentan sobre ese resultado.
+  const filtered = all.filter(
+    (o) => match(o) && (!product || o.items.some((i) => i.name === product)),
+  );
+  const tabs = [
+    { title: "Todos", stages: null as OrderStage[] | null },
+    ...COLUMNS.map((c) => ({ title: c.title, stages: c.stages as OrderStage[] | null })),
+  ];
+  const current = tabs.find((t) => t.title === tab) ?? tabs[0];
+  const rows = current?.stages
+    ? filtered.filter((o) => current.stages?.includes(o.stage))
+    : filtered;
+  const sum = rows.reduce((acc, o) => acc + Number(o.total), 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <div className="flex rounded-xl border border-zinc-200 p-0.5 dark:border-zinc-800">
+          {([...PERIODS, ["rango", "Fechas"]] as [Period, string][]).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              aria-pressed={period === k}
+              onClick={() => setPeriod(k)}
+              className={`rounded-lg px-2.5 py-1 ${
+                period === k
+                  ? "bg-brand-600 text-brand-ink"
+                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {period === "rango" && (
+          <span className="flex items-center gap-1.5">
+            <input
+              type="date"
+              className="input w-auto"
+              aria-label="Desde"
+              value={from}
+              max={to}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+            <span className="text-zinc-500">a</span>
+            <input
+              type="date"
+              className="input w-auto"
+              aria-label="Hasta"
+              value={to}
+              min={from}
+              max={ymd(new Date())}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </span>
+        )}
+        <select
+          className="input w-auto"
+          aria-label="Producto"
+          value={product}
+          onChange={(e) => setProduct(e.target.value)}
+        >
+          <option value="">Todos los productos</option>
+          {productNames.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+        {(period !== "30" || product) && (
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => {
+              setPeriod("30");
+              setProduct("");
+            }}
+          >
+            Quitar filtros
+          </button>
+        )}
+      </div>
+      {period === "rango" && !range && (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          Elige una fecha de inicio anterior a la fecha final.
+        </p>
+      )}
+      <ErrorText>{error}</ErrorText>
+      {all.length >= 1000 && (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          Se muestran los 1000 pedidos más recientes del rango. Acorta las fechas para ver el resto.
+        </p>
+      )}
+
+      <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
+        {tabs.map((t) => {
+          const n = t.stages
+            ? filtered.filter((o) => t.stages?.includes(o.stage)).length
+            : filtered.length;
+          const active = t.title === current?.title;
+          return (
+            <button
+              key={t.title}
+              type="button"
+              onClick={() => setTab(t.title)}
+              aria-pressed={active}
+              className={`-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-sm ${
+                active
+                  ? "border-brand-600 font-medium text-brand-800 dark:text-brand-300"
+                  : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+              }`}
+            >
+              {t.title}
+              <span className="rounded-full bg-zinc-100 px-1.5 text-xs dark:bg-zinc-800">{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {orders === null ? (
+        <p className="py-6 text-center text-sm text-zinc-500">Cargando pedidos…</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-zinc-500">No hay pedidos con estos filtros.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <table className="w-full text-sm">
+            <thead className="bg-zinc-50 text-left text-xs text-zinc-500 dark:bg-zinc-900">
+              <tr>
+                <th className="px-3 py-2 font-medium">Cliente</th>
+                <th className="px-3 py-2 font-medium">Ciudad</th>
+                <th className="px-3 py-2 font-medium">Productos</th>
+                <th className="px-3 py-2 text-right font-medium">Total</th>
+                <th className="px-3 py-2 font-medium">Estado</th>
+                <th className="px-3 py-2 font-medium">Origen</th>
+                <th className="px-3 py-2 font-medium">Fecha</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              {rows.map((o) => (
+                <tr
+                  key={o.id}
+                  onClick={() => onOpen(o.id)}
+                  className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                >
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      className="text-left font-medium hover:underline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpen(o.id);
+                      }}
+                    >
+                      {fullName(o.customer)}
+                    </button>
+                    {o.customer.telefono && (
+                      <div className="text-xs text-zinc-500">
+                        {displayPhone(o.customer.telefono, o.contactPhone)}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">{o.customer.ciudad || "—"}</td>
+                  <td className="max-w-64 px-3 py-2">
+                    <div className="truncate">
+                      {o.items.map((i) => `${i.quantity}× ${i.name}`).join(", ")}
+                    </div>
+                    {o.customer.agencia && (
+                      <div className="truncate text-xs text-zinc-500">Retiro en agencia</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">{money(o)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <StageBadge stage={o.stage} />
+                      {o.stage === "en_oficina" && <DaysInAgency since={o.stageSince} />}
+                      {o.dropiOrderId && (
+                        <span className="text-[11px] text-zinc-500">#{o.dropiOrderId}</span>
+                      )}
+                    </div>
+                    {o.uploadError && (
+                      <div className="mt-0.5 max-w-56 truncate text-[11px] text-red-600 dark:text-red-400">
+                        {o.uploadError}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-zinc-500">
+                    {o.source === "ia" ? "IA" : "Asesor"}
+                  </td>
+                  <td className="px-3 py-2 text-xs whitespace-nowrap text-zinc-500">
+                    {when(o.createdAt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-zinc-50 text-sm dark:bg-zinc-900">
+              <tr>
+                <td className="px-3 py-2 text-zinc-500" colSpan={3}>
+                  {rows.length} pedido{rows.length === 1 ? "" : "s"}
+                </td>
+                <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
+                  {sum.toFixed(2)} {rows[0]?.currency ?? ""}
+                </td>
+                <td colSpan={3} />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** useSearchParams necesita un Suspense para que la página se pueda prerenderizar. */
 export default function OrdersPageRoute() {
   return (
@@ -1154,6 +1441,19 @@ function OrdersPage() {
   const [creating, setCreating] = useState(false);
   /** Etapas a mostrar cuando se llega desde el Inicio (?etapa=novedad,en_oficina). */
   const [only, setOnly] = useState<OrderStage[] | null>(null);
+  /** Tablero o lista; se recuerda en este equipo. */
+  const [view, setView] = useState<"tablero" | "lista">("tablero");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("selichat:vistaPedidos") === "lista") setView("lista");
+    } catch {}
+  }, []);
+  const switchView = (v: "tablero" | "lista") => {
+    setView(v);
+    try {
+      localStorage.setItem("selichat:vistaPedidos", v);
+    } catch {}
+  };
 
   const params = useSearchParams();
   const router = useRouter();
@@ -1181,7 +1481,10 @@ function OrdersPage() {
     router.replace("/panel/pedidos", { scroll: false });
   };
 
+  /** Sube en cada recarga para que la vista Lista vuelva a pedir sus pedidos. */
+  const [version, setVersion] = useState(0);
   const load = useCallback(async () => {
+    setVersion((v) => v + 1);
     try {
       setOrders(await api<Order[]>("/api/orders"));
       setError("");
@@ -1196,15 +1499,14 @@ function OrdersPage() {
   }, [load]);
 
   const needle = q.trim().toLowerCase();
-  const byStage = only ? orders.filter((o) => only.includes(o.stage)) : orders;
-  const shown = needle
-    ? byStage.filter((o) =>
-        [fullName(o.customer), o.customer.telefono, o.customer.ciudad, o.dropiOrderId ?? ""]
-          .join(" ")
-          .toLowerCase()
-          .includes(needle),
-      )
-    : byStage;
+  const matches = (o: Order) =>
+    (!only || only.includes(o.stage)) &&
+    (!needle ||
+      [fullName(o.customer), o.customer.telefono, o.customer.ciudad, o.dropiOrderId ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle));
+  const shown = orders.filter(matches);
   const pending = orders.filter((o) => LOCAL_STAGES.includes(o.stage)).length;
 
   return (
@@ -1221,6 +1523,29 @@ function OrdersPage() {
       />
       <NotifyBanner />
       <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="flex rounded-xl border border-zinc-200 p-0.5 dark:border-zinc-800">
+          {(
+            [
+              ["tablero", "Tablero", KanbanSquare],
+              ["lista", "Lista", List],
+            ] as const
+          ).map(([k, label, Icon]) => (
+            <button
+              key={k}
+              type="button"
+              aria-pressed={view === k}
+              onClick={() => switchView(k)}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ${
+                view === k
+                  ? "bg-brand-600 text-brand-ink"
+                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              }`}
+            >
+              <Icon className="size-4" />
+              {label}
+            </button>
+          ))}
+        </div>
         <input
           className="input max-w-xs"
           placeholder="Buscar por nombre, teléfono, ciudad o #Dropi"
@@ -1251,7 +1576,10 @@ function OrdersPage() {
           «Crear pedido» o aquí con «Nuevo pedido».
         </p>
       )}
-      {orders.length > 0 && (
+      {orders.length > 0 && view === "lista" && (
+        <OrdersList match={matches} version={version} onOpen={setOpen} />
+      )}
+      {orders.length > 0 && view === "tablero" && (
         <div className="flex gap-3 overflow-x-auto pb-4">
           {COLUMNS.map((col) => {
             const list = shown.filter((o) => col.stages.includes(o.stage));
