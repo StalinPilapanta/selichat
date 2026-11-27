@@ -9,6 +9,7 @@ import {
 import { Package, Plus, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { type FingerprintData, FingerprintView } from "@/components/Fingerprint";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
 import { NotifyBanner } from "@/lib/order-alerts";
@@ -413,6 +414,160 @@ const EMPTY_CUSTOMER = {
   referencia: "",
 };
 
+type Places = {
+  departments: { id: number; name: string }[];
+  cities: { id: number; name: string; departmentId: number | null }[];
+  unavailable?: string;
+};
+type AgencyOpt = {
+  /** NOMBRE---SECTOR---DIRECCIÓN: así se registra el retiro en la guía. */
+  registro: string;
+  /** Nombre en Servientrega, p. ej. QUITO_GUAJALO. */
+  nombre: string;
+  nombreCorto: string;
+  sector: string;
+  direccion: string;
+  horario: string;
+};
+
+const fold = (t: string) =>
+  t
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+/** Huellas ya consultadas en esta pestaña: el mismo teléfono no vuelve a pedirse. */
+const fingerprintCache = new Map<string, FingerprintData>();
+
+/**
+ * Huella del teléfono escrito: espera a que se termine de escribir y consulta una sola vez
+ * por número (el API además guarda la respuesta de Dropi varias horas).
+ */
+function PhoneFingerprint({ phone }: { phone: string }) {
+  const digits = phone.replace(/\D/g, "");
+  const [data, setData] = useState<FingerprintData | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    setData(null);
+    if (digits.length < 9) return;
+    const cached = fingerprintCache.get(digits);
+    if (cached) {
+      setData(cached);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      setLoading(true);
+      api<FingerprintData>(`/api/fingerprint?phone=${digits}`)
+        .then((d) => {
+          fingerprintCache.set(digits, d);
+          if (alive) setData(d);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (alive) setLoading(false);
+        });
+    }, 800);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [digits]);
+  if (loading) return <p className="text-xs text-zinc-500">Consultando huella…</p>;
+  return data ? <FingerprintView data={data} /> : null;
+}
+
+/** Buscador de agencias Servientrega con retiro en la ciudad elegida. */
+function AgencyPicker({
+  ciudad,
+  value,
+  onPick,
+}: {
+  ciudad: string;
+  value: AgencyOpt | null;
+  onPick: (a: AgencyOpt | null) => void;
+}) {
+  const [list, setList] = useState<AgencyOpt[] | null>(null);
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    setList(null);
+    setQ("");
+    if (!ciudad) return;
+    let alive = true;
+    api<{ agencies: AgencyOpt[] }>(`/api/agencies?ciudad=${encodeURIComponent(ciudad)}`)
+      .then((r) => {
+        if (alive) setList(r.agencies);
+      })
+      .catch(() => {
+        if (alive) setList([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ciudad]);
+
+  if (!ciudad)
+    return <p className="text-xs text-zinc-500">Elige primero la ciudad para ver sus agencias.</p>;
+  if (value)
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-brand-300 bg-brand-50/50 p-2 text-sm dark:border-brand-800 dark:bg-brand-950/30">
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">
+            {value.nombre}
+            {value.sector ? ` · ${value.sector}` : ""}
+          </div>
+          <div className="text-xs text-zinc-500">{value.direccion}</div>
+          {value.horario && <div className="text-xs text-zinc-500">{value.horario}</div>}
+        </div>
+        <button type="button" className="btn-ghost" onClick={() => onPick(null)}>
+          Cambiar
+        </button>
+      </div>
+    );
+  if (!list) return <p className="text-xs text-zinc-500">Buscando agencias…</p>;
+  if (!list.length)
+    return (
+      <p className="text-xs text-amber-700 dark:text-amber-400">
+        No hay agencias Servientrega con retiro en {ciudad}. Usa entrega a domicilio.
+      </p>
+    );
+  const needle = fold(q.trim());
+  const shown = list.filter((a) =>
+    fold(`${a.nombre} ${a.nombreCorto} ${a.sector} ${a.direccion}`).includes(needle),
+  );
+  return (
+    <div className="space-y-1">
+      <input
+        className="input"
+        placeholder={`Buscar entre ${list.length} agencias por nombre, sector o dirección`}
+        aria-label="Buscar agencia Servientrega"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <ul className="max-h-56 divide-y divide-zinc-200 overflow-y-auto rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+        {shown.map((a) => (
+          <li key={a.registro}>
+            <button
+              type="button"
+              className="w-full p-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900"
+              onClick={() => onPick(a)}
+            >
+              <div className="font-medium">
+                {a.nombre}
+                {a.sector ? <span className="font-normal text-zinc-500"> · {a.sector}</span> : null}
+              </div>
+              <div className="text-xs text-zinc-500">{a.direccion}</div>
+            </button>
+          </li>
+        ))}
+        {shown.length === 0 && (
+          <li className="p-2 text-sm text-zinc-500">Ninguna agencia coincide.</li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * Pedido ingresado a mano (llamada, local, otra red): datos del cliente, productos con el
  * precio del catálogo y, si se quiere, subida a Dropi en el mismo paso.
@@ -429,13 +584,36 @@ function NewOrderPanel({
   const [customer, setCustomer] = useState(EMPTY_CUSTOMER);
   const [lines, setLines] = useState<Line[]>([]);
   const [total, setTotal] = useState("");
+  /** El asesor escribió el total: deja de seguir al precio del catálogo. */
+  const [totalTouched, setTotalTouched] = useState(false);
   const [rateType, setRateType] = useState("CON RECAUDO");
   const [notes, setNotes] = useState("");
   const [upload, setUpload] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [places, setPlaces] = useState<Places | null>(null);
+  const [placesError, setPlacesError] = useState("");
+  const [delivery, setDelivery] = useState<"domicilio" | "agencia">("domicilio");
+  const [agency, setAgency] = useState<AgencyOpt | null>(null);
+  /** Dirección de la agencia, editable (p. ej. «retira su hermano Juan»). */
+  const [agencyText, setAgencyText] = useState("");
+  /** Se intentó crear: desde ahí se marcan en rojo los campos que faltan. */
+  const [tried, setTried] = useState(false);
 
   useEffect(() => {
+    // Provincias y ciudades tal cual las tiene Dropi (la ciudad depende de la provincia).
+    api<Places>("/api/places")
+      .then(setPlaces)
+      .catch((e) => {
+        setPlaces({ departments: [], cities: [], unavailable: "error" });
+        setPlacesError(errorMessage(e));
+      });
+    // Si la tienda envía todo a agencia, el pedido arranca en «retiro en agencia».
+    api<{ mode: string }>("/api/agencies")
+      .then((r) => {
+        if (r.mode === "solo") setDelivery("agencia");
+      })
+      .catch(() => {});
     api<ProductRow[]>("/api/products")
       .then((rows) => {
         const list = rows.filter((r) => r.status !== "inactivo");
@@ -459,6 +637,10 @@ function NewOrderPanel({
   }, [lines, details]);
 
   const computed = lines.reduce((sum, l) => sum + linePrice(details[l.productId], l), 0);
+  // El total arranca con el precio del catálogo (ofertas incluidas) y se puede cambiar.
+  useEffect(() => {
+    if (!totalTouched) setTotal(computed > 0 ? computed.toFixed(2) : "");
+  }, [computed, totalTouched]);
   const currency = details[lines[0]?.productId ?? ""]?.currency ?? products[0]?.currency ?? "";
   const setLine = (i: number, patch: Partial<Line>) =>
     setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -468,21 +650,132 @@ function NewOrderPanel({
       setCustomer({ ...customer, [key]: e.target.value }),
   });
 
-  async function save(e: React.FormEvent) {
+  const hasPlaces = Boolean(places?.departments.length);
+  const dept = places?.departments.find((d) => d.name === customer.provincia);
+  const cities = dept ? (places?.cities ?? []).filter((c) => c.departmentId === dept.id) : [];
+  const setPlace = (patch: { provincia?: string; ciudad?: string }) => {
+    // Cambiar de ciudad invalida la agencia elegida.
+    setAgency(null);
+    setCustomer((c) => ({
+      ...c,
+      ...patch,
+      ...(delivery === "agencia" ? { direccion: "" } : {}),
+    }));
+  };
+  const switchDelivery = (d: "domicilio" | "agencia") => {
+    if (d === delivery) return;
+    setDelivery(d);
+    setAgency(null);
+    setCustomer((c) => ({ ...c, direccion: "", referencia: "" }));
+  };
+  const pickAgency = (a: AgencyOpt | null) => {
+    setAgency(a);
+    // Se llena como la guía: NOMBRE---SECTOR---DIRECCIÓN (QUITO_GUAJALO---SUR---AV. …).
+    setAgencyText(a?.registro ?? "");
+    setCustomer((c) => ({ ...c, direccion: a?.registro ?? "", referencia: "" }));
+  };
+  /**
+   * NOMBRE---SECTOR---DIRECCIÓN como lo dejó el asesor. Si borró los separadores, se
+   * vuelven a poner el nombre y el sector de la agencia para no romper el formato de la guía.
+   */
+  const agencyRegistro = (a: AgencyOpt) => {
+    const text = agencyText.trim();
+    if (!text) return a.registro;
+    if (text.split("---").length >= 3) return text;
+    const [nombre = "", sector = ""] = a.registro.split("---");
+    return [nombre, sector, text.replace(/---/g, " ")].join("---");
+  };
+
+  const phoneDigits = customer.telefono.replace(/\D/g, "");
+  const totalNum = Number(total.replace(",", "."));
+  /** Lo que falta para poder crear el pedido, en el orden del formulario. */
+  const missing = [
+    !customer.nombre.trim() && { key: "nombre", label: "nombre", msg: "Ingresa el nombre." },
+    !customer.apellido.trim() && {
+      key: "apellido",
+      label: "apellido",
+      msg: "Ingresa el apellido.",
+    },
+    phoneDigits.length < 9 && {
+      key: "telefono",
+      label: phoneDigits ? "teléfono completo" : "teléfono",
+      msg: phoneDigits
+        ? "El teléfono está incompleto (mínimo 9 dígitos)."
+        : "Ingresa el teléfono o WhatsApp.",
+    },
+    hasPlaces &&
+      !customer.provincia && { key: "provincia", label: "provincia", msg: "Elige la provincia." },
+    !customer.ciudad.trim() && { key: "ciudad", label: "ciudad", msg: "Elige la ciudad." },
+    delivery === "domicilio" &&
+      customer.direccion.trim().length < 3 && {
+        key: "direccion",
+        label: "dirección",
+        msg: "Ingresa la dirección de entrega.",
+      },
+    delivery === "agencia" &&
+      !agency && {
+        key: "agencia",
+        label: "agencia Servientrega",
+        msg: "Elige la agencia Servientrega donde retira el cliente.",
+      },
+    !lines.some((l) => l.productId) && {
+      key: "productos",
+      label: "producto",
+      msg: "Agrega al menos un producto.",
+    },
+    !(totalNum > 0) && {
+      key: "total",
+      label: "total a cobrar",
+      msg: total.trim() ? "El total debe ser mayor a 0." : "Ingresa el total a cobrar.",
+    },
+  ].filter(Boolean) as { key: string; label: string; msg: string }[];
+  const bad = (k: string) => tried && missing.some((m) => m.key === k);
+  /** Mensaje debajo del campo que falta. */
+  const hint = (k: string) => {
+    const m = tried ? missing.find((x) => x.key === k) : undefined;
+    return m ? (
+      <span className="mt-1 block text-xs text-red-600 dark:text-red-400">{m.msg}</span>
+    ) : null;
+  };
+  /** Clase y aria del campo según si falta. */
+  const mark = (k: string) => ({
+    "aria-invalid": bad(k) || undefined,
+    className: `input${bad(k) ? " border-red-500 ring-1 ring-red-500" : ""}`,
+  });
+
+  async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setTried(true);
+    if (missing.length) {
+      setError("");
+      // Lleva al primer campo que falta.
+      const form = e.currentTarget;
+      requestAnimationFrame(() =>
+        (form.querySelector('[aria-invalid="true"]') as HTMLElement | null)?.focus(),
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const r = await api<{ order: { id: string } }>("/api/orders", {
         method: "POST",
         body: {
-          customer,
+          customer:
+            delivery === "agencia" && agency
+              ? {
+                  ...customer,
+                  direccion: agencyRegistro(agency),
+                  referencia: "",
+                  agencia: agencyRegistro(agency),
+                }
+              : customer,
           items: lines.map((l) => ({
             productId: l.productId,
             quantity: l.quantity,
             ...(l.variant ? { variant: l.variant } : {}),
           })),
-          ...(total.trim() ? { total: Number(total.replace(",", ".")) } : {}),
+          total: totalNum,
           rateType,
           notes,
           upload,
@@ -498,14 +791,11 @@ function NewOrderPanel({
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/30">
-      <button
-        type="button"
-        className="absolute inset-0 cursor-default"
-        aria-label="Cerrar"
-        onClick={onClose}
-      />
+      {/* Fondo sin acción: un clic afuera no debe perder lo escrito. Se cierra con ✕ o Cancelar. */}
+      <div className="absolute inset-0" aria-hidden />
       <form
         onSubmit={save}
+        noValidate
         className="relative h-full w-full max-w-md space-y-4 overflow-y-auto bg-white p-5 shadow-xl dark:bg-zinc-950"
       >
         <div className="flex items-start justify-between">
@@ -525,41 +815,146 @@ function NewOrderPanel({
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <span className="label">Nombre</span>
-              <input className="input" required {...field("nombre")} />
+              <input {...mark("nombre")} {...field("nombre")} />
+              {hint("nombre")}
             </label>
             <label className="block">
               <span className="label">Apellido</span>
-              <input className="input" {...field("apellido")} />
+              <input {...mark("apellido")} {...field("apellido")} />
+              {hint("apellido")}
             </label>
           </div>
           <label className="block">
             <span className="label">Teléfono / WhatsApp</span>
             <input
-              className="input"
-              required
+              {...mark("telefono")}
               inputMode="tel"
               placeholder="0991234567"
               {...field("telefono")}
             />
+            {hint("telefono")}
           </label>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="block">
-              <span className="label">Ciudad</span>
-              <input className="input" required {...field("ciudad")} />
-            </label>
-            <label className="block">
-              <span className="label">Provincia</span>
-              <input className="input" placeholder="Opcional" {...field("provincia")} />
-            </label>
-          </div>
-          <label className="block">
-            <span className="label">Dirección</span>
-            <input className="input" required minLength={3} {...field("direccion")} />
-          </label>
-          <label className="block">
-            <span className="label">Referencia</span>
-            <input className="input" placeholder="Cerca de…" {...field("referencia")} />
-          </label>
+          <PhoneFingerprint phone={customer.telefono} />
+          {!places ? (
+            <p className="text-xs text-zinc-500">Cargando provincias y ciudades de Dropi…</p>
+          ) : hasPlaces ? (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="label">Provincia</span>
+                <select
+                  {...mark("provincia")}
+                  value={customer.provincia}
+                  onChange={(e) => setPlace({ provincia: e.target.value, ciudad: "" })}
+                >
+                  <option value="">Elige…</option>
+                  {places.departments.map((d) => (
+                    <option key={d.id} value={d.name}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+                {hint("provincia")}
+              </label>
+              <label className="block">
+                <span className="label">Ciudad</span>
+                <select
+                  {...mark("ciudad")}
+                  disabled={!dept}
+                  value={customer.ciudad}
+                  onChange={(e) => setPlace({ ciudad: e.target.value })}
+                >
+                  <option value="">{dept ? "Elige…" : "Primero la provincia"}</option>
+                  {cities.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                {hint("ciudad")}
+              </label>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                {placesError ||
+                  "Conecta Dropi (Integraciones → Dropi) para elegir provincia y ciudad de su lista."}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="label">Provincia</span>
+                  <input className="input" {...field("provincia")} />
+                </label>
+                <label className="block">
+                  <span className="label">Ciudad</span>
+                  <input {...mark("ciudad")} {...field("ciudad")} />
+                  {hint("ciudad")}
+                </label>
+              </div>
+            </>
+          )}
+
+          <fieldset>
+            <legend className="label">Entrega</legend>
+            <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-200 p-1 dark:border-zinc-800">
+              {(
+                [
+                  ["domicilio", "A domicilio"],
+                  ["agencia", "Retiro en agencia Servientrega"],
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={delivery === k}
+                  onClick={() => switchDelivery(k)}
+                  className={`rounded-md px-2 py-1.5 text-sm ${
+                    delivery === k
+                      ? "bg-brand-600 text-brand-ink"
+                      : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          {delivery === "domicilio" ? (
+            <>
+              <label className="block">
+                <span className="label">Dirección</span>
+                <input {...mark("direccion")} {...field("direccion")} />
+                {hint("direccion")}
+              </label>
+              <label className="block">
+                <span className="label">Referencia</span>
+                <input className="input" placeholder="Cerca de…" {...field("referencia")} />
+              </label>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <label className="block">
+                <span className="label">
+                  Dirección de la agencia
+                  {agency && (
+                    <span className="font-normal text-zinc-500">
+                      {" "}
+                      · nombre---sector---dirección; puedes agregar indicaciones al final
+                    </span>
+                  )}
+                </span>
+                <input
+                  className="input"
+                  disabled={!agency}
+                  placeholder="Se llena al elegir la agencia"
+                  value={agencyText}
+                  onChange={(e) => setAgencyText(e.target.value)}
+                />
+              </label>
+              <AgencyPicker ciudad={customer.ciudad} value={agency} onPick={pickAgency} />
+              {hint("agencia")}
+            </div>
+          )}
         </section>
 
         <section className="space-y-2">
@@ -662,14 +1057,27 @@ function NewOrderPanel({
             <label className="block">
               <span className="label">Total a cobrar</span>
               <input
-                className="input"
+                {...mark("total")}
                 inputMode="decimal"
-                placeholder={computed ? computed.toFixed(2) : "0.00"}
+                placeholder="0.00"
                 value={total}
-                onChange={(e) => setTotal(e.target.value)}
+                onChange={(e) => {
+                  setTotalTouched(true);
+                  setTotal(e.target.value);
+                }}
               />
+              {hint("total")}
               <span className="mt-1 block text-xs text-zinc-500">
-                Vacío = {computed.toFixed(2)} {currency} del catálogo
+                Catálogo: {computed.toFixed(2)} {currency}
+                {totalTouched && Math.abs(totalNum - computed) > 0.004 && computed > 0 && (
+                  <button
+                    type="button"
+                    className="ml-1 underline"
+                    onClick={() => setTotalTouched(false)}
+                  >
+                    usar este
+                  </button>
+                )}
               </span>
             </label>
             <label className="block">
@@ -694,6 +1102,19 @@ function NewOrderPanel({
           </label>
         </section>
 
+        {tried && missing.length > 0 && (
+          <div
+            role="alert"
+            className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+          >
+            <div className="font-medium">Para crear el pedido falta:</div>
+            <ul className="mt-1 list-disc pl-5">
+              {missing.map((m) => (
+                <li key={m.key}>{m.label}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         <ErrorText>{error}</ErrorText>
         <div className="flex gap-2">
           <button type="submit" className="btn" disabled={busy || lines.length === 0}>

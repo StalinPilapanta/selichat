@@ -252,6 +252,41 @@ async function placesOf(client: DropiApi, rateType: string, db?: Database): Prom
   }
 }
 
+/**
+ * Provincias y ciudades de Dropi para los selectores del panel (ciudad depende de
+ * la provincia). null si la tienda no tiene Dropi conectado.
+ */
+export async function listPlaces(deps: DropiDeps, tenantId: string) {
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+  const dropi = await loadDropi(deps, tenantId);
+  if (dropi) {
+    const set = await placesOf(dropi.client, dropi.config.options.rateType, deps.db);
+    return {
+      departments: set.departments.map((d) => ({ id: d.id, name: d.name })).sort(byName),
+      cities: set.cities
+        .map((c) => ({ id: c.id, name: c.name, departmentId: c.departmentId }))
+        .sort(byName),
+    };
+  }
+  // Sin Dropi conectado: el catálogo del país que ya guardó otra tienda (es el mismo de Dropi).
+  const [settings] = await withTenant(deps.db, tenantId, (tx) => tx.select().from(tenantSettings));
+  const rows = await deps.db
+    .select()
+    .from(dropiPlaces)
+    .where(eq(dropiPlaces.country, settings?.country || "EC"));
+  if (!rows.some((r) => r.kind === "city")) return null;
+  return {
+    departments: rows
+      .filter((r) => r.kind === "department")
+      .map((r) => ({ id: r.id, name: r.name }))
+      .sort(byName),
+    cities: rows
+      .filter((r) => r.kind === "city")
+      .map((r) => ({ id: r.id, name: r.name, departmentId: r.departmentId }))
+      .sort(byName),
+  };
+}
+
 const matchCity = (q: string) => (c: DropiCity) => {
   const n = normPlace(c.name);
   return n.includes(q) || q.startsWith(`${n} `);
@@ -586,7 +621,8 @@ export async function createOrderFromConversation(
 }
 
 export interface ManualOrderInput {
-  customer: Omit<OrderCustomer, "agencia">;
+  /** `agencia` = NOMBRE---SECTOR---DIRECCIÓN cuando retira en agencia Servientrega. */
+  customer: OrderCustomer;
   items: { productId: string; quantity: number; variant?: string }[];
   /** Total cobrado al cliente; si falta se calcula con ofertas y precios del catálogo. */
   total?: number;
@@ -656,7 +692,12 @@ export async function createManualOrder(db: Database, tenantId: string, input: M
         total: total.toFixed(2),
         currency,
         rateType: input.rateType,
-        notes: input.notes,
+        notes: [
+          input.customer.agencia && `RETIRO EN AGENCIA: ${input.customer.agencia.split("---")[0]}`,
+          input.notes,
+        ]
+          .filter(Boolean)
+          .join(" · "),
       })
       .returning();
     if (!order) throw new OrderError("No se pudo crear el pedido.");

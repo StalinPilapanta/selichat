@@ -8,6 +8,7 @@ import {
   encryptSecret,
   LOCAL_STAGES,
   maskSecret,
+  nationalPhone,
   ORDER_STAGE_KEYS,
   type OrderStage,
 } from "@chatea/shared";
@@ -15,6 +16,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Auth } from "../auth.js";
+import { ciudadDe, deCiudad } from "../carriers/agencias-geo.js";
 import {
   AGENCY_MODES,
   type AgencyMode,
@@ -32,6 +34,7 @@ import {
   type DropiDeps,
   dropiClient,
   forgetDropiClient,
+  listPlaces,
   loadDropi,
   type OnStage,
   OrderError,
@@ -42,8 +45,16 @@ import {
 import { requireTenant } from "../plugins/tenant.js";
 import { advanceLead } from "../services/leads.js";
 
-const { integrations, dropiRoutes, orders, orderEvents, contacts, conversations, auditLog } =
-  schema;
+const {
+  integrations,
+  dropiRoutes,
+  orders,
+  orderEvents,
+  contacts,
+  conversations,
+  auditLog,
+  tenantSettings,
+} = schema;
 const isUuid = (v: string) => z.uuid().safeParse(v).success;
 const countryEnum = z.enum(Object.keys(DROPI_COUNTRIES) as [DropiCountry, ...DropiCountry[]]);
 /** Vigencia del enlace de autorización de Dropi. */
@@ -81,13 +92,15 @@ const orderPatch = z.object({
 const manualOrder = z.object({
   customer: z.object({
     nombre: z.string().trim().min(1, "Falta el nombre").max(120),
-    apellido: z.string().trim().max(120).default(""),
+    apellido: z.string().trim().min(1, "Falta el apellido").max(120),
     telefono: z.string().trim().min(7, "Falta el teléfono").max(30),
     provincia: z.string().trim().max(80).default(""),
     ciudad: z.string().trim().min(2, "Falta la ciudad").max(80),
     direccion: z.string().trim().min(3, "Falta la dirección").max(300),
     referencia: z.string().trim().max(300).default(""),
     email: z.string().trim().max(120).optional(),
+    /** Retiro en agencia Servientrega: NOMBRE---SECTOR---DIRECCIÓN (la dirección es la de la agencia). */
+    agencia: z.string().trim().max(400).optional(),
   }),
   items: z
     .array(
@@ -439,6 +452,48 @@ export async function orderRoutes(
     }
   });
 
+  /** Provincias y ciudades de Dropi para el formulario de pedido (ciudad según provincia). */
+  app.get("/api/places", { preHandler: anyMember }, async (req, reply) => {
+    try {
+      const places = await listPlaces(deps, req.ctx.tenantId);
+      return places ?? { departments: [], cities: [], unavailable: "sin_dropi" };
+    } catch (e) {
+      req.log.warn({ err: e }, "no se pudieron leer las ciudades de Dropi");
+      return reply.code(502).send({
+        error: "dropi_no_responde",
+        detail: "Dropi no devolvió las provincias y ciudades. Intenta de nuevo en un momento.",
+      });
+    }
+  });
+
+  /** Agencias Servientrega con retiro en la ciudad (directorio local), para el pedido manual. */
+  app.get<{ Querystring: { ciudad?: string } }>(
+    "/api/agencies",
+    { preHandler: anyMember },
+    async (req) => {
+      const ciudad = (req.query.ciudad ?? "").trim();
+      const mode = await agencyMode(db, req.ctx.tenantId, deps.encryptionKey);
+      // Dropi y el directorio a veces nombran distinto la ciudad («Santo Domingo de los…»).
+      let list = ciudad ? deCiudad(ciudad, true) : [];
+      if (!list.length && ciudad) {
+        const known = ciudadDe(ciudad);
+        if (known) list = deCiudad(known, true);
+      }
+      const agencies = ciudad
+        ? list.map((a) => ({
+            registro: a.registro,
+            // Nombre tal cual en Servientrega (QUITO_GUAJALO): así lo reconocen logística y el bot.
+            nombre: a.nombre,
+            nombreCorto: a.nombreCorto,
+            sector: a.sector,
+            direccion: a.direccion,
+            horario: a.horario,
+          }))
+        : [];
+      return { mode, agencies };
+    },
+  );
+
   /** Último pedido creado: el panel lo consulta para avisar en el escritorio. */
   app.get("/api/orders/latest", { preHandler: anyMember }, async (req) => {
     const [o] = await withTenant(db, req.ctx.tenantId, (tx) =>
@@ -614,6 +669,66 @@ export async function orderRoutes(
     },
   );
 
+  /**
+   * Huella: pedidos del teléfono en esta tienda y en Dropi. La consulta a Dropi tiene
+   * caché (huella global 6 h por teléfono; historial de la tienda compartido).
+   */
+  const fingerprintOf = async (tenantId: string, phone: string, stages: string[]) => {
+    const count = (st: string) => stages.filter((x) => x === st).length;
+    const local = {
+      orders: stages.length,
+      delivered: count("entregado"),
+      returned: count("devolucion"),
+      cancelled: count("cancelado"),
+    };
+    const dropi = await loadDropi(deps, tenantId);
+    if (!dropi) return { local, dropi: null, dropiConnected: false };
+    try {
+      if (dropi.client.fingerprint)
+        return {
+          local,
+          dropi: null,
+          global: await dropi.client.fingerprint(phone),
+          dropiConnected: true,
+        };
+      return { local, dropi: await buyerHistory(dropi.client, phone), dropiConnected: true };
+    } catch (e) {
+      return {
+        local,
+        dropi: null,
+        dropiConnected: true,
+        dropiError: e instanceof DropiError ? e.message : "No se pudo consultar Dropi.",
+      };
+    }
+  };
+
+  /** Huella por teléfono (formulario de pedido manual): se consulta al terminar de escribirlo. */
+  app.get<{ Querystring: { phone?: string } }>(
+    "/api/fingerprint",
+    { preHandler: anyMember },
+    async (req, reply) => {
+      const { tenantId } = req.ctx;
+      const res = await withTenant(db, tenantId, async (tx) => {
+        const [settings] = await tx.select().from(tenantSettings);
+        const country = (
+          settings?.country && settings.country in DROPI_COUNTRIES ? settings.country : "EC"
+        ) as DropiCountry;
+        const national = nationalPhone(req.query.phone ?? "", country);
+        if (national.length < 8) return null;
+        const phone = DROPI_COUNTRIES[country].dial + national;
+        const mine = await tx
+          .select({ stage: orders.stage })
+          .from(orders)
+          .innerJoin(contacts, eq(contacts.id, orders.contactId))
+          .where(eq(contacts.phone, phone));
+        return { phone, stages: mine.map((m) => m.stage) };
+      });
+      if (!res)
+        return reply.code(400).send({ error: "telefono_invalido", detail: "Teléfono incompleto." });
+      return fingerprintOf(tenantId, res.phone, res.stages);
+    },
+  );
+
   /** Huella del cliente para la ficha: sus pedidos en esta tienda y en Dropi. */
   app.get<{ Params: { id: string } }>(
     "/api/conversations/:id/fingerprint",
@@ -635,32 +750,7 @@ export async function orderRoutes(
         return { phone: c.phone, stages: mine.map((m) => m.stage) };
       });
       if (!row) return reply.code(404).send({ error: "no_existe" });
-      const count = (st: string) => row.stages.filter((x) => x === st).length;
-      const local = {
-        orders: row.stages.length,
-        delivered: count("entregado"),
-        returned: count("devolucion"),
-        cancelled: count("cancelado"),
-      };
-      const dropi = await loadDropi(deps, tenantId);
-      if (!dropi) return { local, dropi: null, dropiConnected: false };
-      try {
-        if (dropi.client.fingerprint)
-          return {
-            local,
-            dropi: null,
-            global: await dropi.client.fingerprint(row.phone),
-            dropiConnected: true,
-          };
-        return { local, dropi: await buyerHistory(dropi.client, row.phone), dropiConnected: true };
-      } catch (e) {
-        return {
-          local,
-          dropi: null,
-          dropiConnected: true,
-          dropiError: e instanceof DropiError ? e.message : "No se pudo consultar Dropi.",
-        };
-      }
+      return fingerprintOf(tenantId, row.phone, row.stages);
     },
   );
 }

@@ -1170,6 +1170,11 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().detail).toBe("Falta la dirección");
+    const noSurname = await h.call(s.cookie, "POST", "/api/orders", {
+      customer: { ...customer, apellido: " " },
+      items: [{ productId: product.id, quantity: 1 }],
+    });
+    expect(noSurname.json().detail).toBe("Falta el apellido");
 
     // Sin subir: queda por subir con el precio de la oferta por 2.
     const local = await h.call(s.cookie, "POST", "/api/orders", {
@@ -1201,17 +1206,50 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     expect(dropiOrders).toHaveLength(before + 1);
     expect(dropiOrders.at(-1)).toMatchObject({ city: "QUITO", surname: "Ruiz" });
 
+    // Selectores: provincias y ciudades de Dropi (la ciudad depende de la provincia).
+    const places = (await h.call(s.cookie, "GET", "/api/places")).json();
+    const pichincha = places.departments.find((d: { name: string }) => d.name === "PICHINCHA");
+    expect(pichincha).toBeTruthy();
+    expect(places.cities.find((c: { name: string }) => c.name === "QUITO")?.departmentId).toBe(
+      pichincha.id,
+    );
+
+    // Agencias Servientrega con retiro en la ciudad; al elegir una, va como dirección.
+    const ag = (await h.call(s.cookie, "GET", "/api/agencies?ciudad=QUITO")).json();
+    expect(ag.agencies.length).toBeGreaterThan(3);
+    const agencia = ag.agencies[0].registro as string;
+    expect(agencia.split("---")).toHaveLength(3);
+    // Nombre tal cual en Servientrega y registro NOMBRE---SECTOR---DIRECCIÓN.
+    expect(ag.agencies[0].nombre).toMatch(/^QUITO_/);
+    expect(agencia.startsWith(`${ag.agencies[0].nombre}---`)).toBe(true);
+    const viaAgency = await h.call(s.cookie, "POST", "/api/orders", {
+      customer: { ...customer, direccion: agencia, agencia },
+      items: [{ productId: product.id, quantity: 1 }],
+      upload: true,
+    });
+    expect(viaAgency.statusCode, viaAgency.body).toBe(201);
+    expect(viaAgency.json().order.notes).toMatch(/^RETIRO EN AGENCIA: /);
+    expect(dropiOrders.at(-1)).toMatchObject({ dir: agencia });
+
+    // Huella al escribir el teléfono: sus pedidos en la tienda y en Dropi (con caché).
+    const fp = (await h.call(s.cookie, "GET", "/api/fingerprint?phone=0998887766")).json();
+    expect(fp.local.orders).toBe(3);
+    expect(fp.dropiConnected).toBe(true);
+    expect(fp.dropi).toMatchObject({ orders: expect.any(Number) });
+    const short = await h.call(s.cookie, "GET", "/api/fingerprint?phone=0998");
+    expect(short.statusCode).toBe(400);
+
     // Último pedido para el aviso de escritorio.
     const latest = (await h.call(s.cookie, "GET", "/api/orders/latest")).json();
-    expect(latest.order.id).toBe(up.json().order.id);
+    expect(latest.order.id).toBe(viaAgency.json().order.id);
 
     // El Inicio los cuenta y marca lo que ya está configurado.
     const d = (await h.call(s.cookie, "GET", "/api/dashboard")).json();
-    expect(d.today.orders).toBe(2);
-    expect(d.today.amount).toBeCloseTo(53.5);
+    expect(d.today.orders).toBe(3);
+    expect(d.today.amount).toBeCloseTo(73.5);
     expect(d.stages.pendiente_subida).toEqual({ count: 1, amount: 35 });
     expect(d.attention.toUpload).toBe(1);
-    expect(d.recent).toHaveLength(2);
+    expect(d.recent).toHaveLength(3);
     expect(d.setup).toMatchObject({ whatsapp: true, products: true, dropi: true, team: false });
   });
 
