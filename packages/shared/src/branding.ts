@@ -5,12 +5,32 @@
  */
 import { z } from "zod";
 
-export const DEFAULT_BRAND_COLOR = "#059669";
+export const DEFAULT_BRAND_COLOR = "#568100";
+
+/**
+ * Escala de la marca por defecto (verde lima), afinada a mano: la calculada desde el 600 queda
+ * apagada en los tonos claros, y en modo oscuro se usan el 300/400 para textos y acentos.
+ */
+const DEFAULT_SCALE: Record<string, string> = {
+  "50": "#f5fbe8",
+  "100": "#e8f5c8",
+  "200": "#d2eb9a",
+  "300": "#b8de7a",
+  "400": "#8fc531",
+  "500": "#74a823",
+  "600": "#568100",
+  "700": "#466a06",
+  "800": "#3a550b",
+  "900": "#31470e",
+  "950": "#182702",
+  ink: "#ffffff",
+};
 export const DEFAULT_BRAND_NAME = "Selichat";
 
 /** Colores sugeridos (todos con buen contraste para botones). */
 export const BRAND_PRESETS: { name: string; color: string }[] = [
-  { name: "Verde Selichat", color: "#059669" },
+  { name: "Lima Selichat", color: "#568100" },
+  { name: "Verde esmeralda", color: "#059669" },
   { name: "Esmeralda natural", color: "#15803d" },
   { name: "Turquesa", color: "#0d9488" },
   { name: "Azul", color: "#2563eb" },
@@ -86,6 +106,7 @@ const STEPS: [number, "w" | "k", number][] = [
 /** Escala completa de la marca a partir del color (el color queda como tono 600). */
 export function brandScale(color: string | null | undefined): Record<string, string> {
   const base = HEX.test(color ?? "") ? (color as string).toLowerCase() : DEFAULT_BRAND_COLOR;
+  if (base === DEFAULT_BRAND_COLOR) return { ...DEFAULT_SCALE };
   const rgb = toRgb(base);
   const out: Record<string, string> = { "600": base };
   for (const [step, toward, t] of STEPS)

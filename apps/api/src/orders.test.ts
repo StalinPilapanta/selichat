@@ -23,6 +23,7 @@ import {
 import { findAgencies, resolveAgency } from "./carriers/servientrega.js";
 import type { DropiApi } from "./dropi/client.js";
 import { DropiMcpClient, parseToon, REAUTH_MESSAGE } from "./dropi/mcp.js";
+import { localDay, pickupReminderDue } from "./orders/notify.js";
 import {
   evaluateGlobalRisk,
   evaluateRisk,
@@ -1487,5 +1488,23 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     expect(
       (await h.call(other.cookie, "DELETE", `/api/contacts/${conv.contact.id}`)).statusCode,
     ).toBe(404);
+  });
+});
+
+describe("recordatorio de retiro en agencia", () => {
+  it("cada mañana desde el día siguiente a la llegada, nunca el mismo día del aviso de llegada", () => {
+    const due = (today: string, arrivalNoticeDay: string | null = "2026-11-10") =>
+      pickupReminderDue({ today, arrivedDay: "2026-11-10", arrivalNoticeDay });
+    expect(due("2026-11-10")).toBe(false); // llegó hoy: solo el aviso de llegada
+    expect(due("2026-11-11")).toBe(true);
+    expect(due("2026-11-14")).toBe(true); // sigue cada día hasta que lo retire
+    // Llegó de noche y el aviso salió esta mañana al abrir: hoy no se repite.
+    expect(due("2026-11-11", "2026-11-11")).toBe(false);
+    expect(due("2026-11-11", null)).toBe(true);
+  });
+
+  it("el día se cuenta en la hora de la tienda", () => {
+    // 03:00 UTC del 11 = 22:00 del 10 en Guayaquil.
+    expect(localDay(new Date("2026-11-11T03:00:00Z"), "America/Guayaquil")).toBe("2026-11-10");
   });
 });

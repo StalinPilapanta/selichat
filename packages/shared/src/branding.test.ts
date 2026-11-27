@@ -17,8 +17,9 @@ describe("branding", () => {
     expect(brandScale("#059669").ink).toBe("#ffffff");
     expect(brandScale("#facc15").ink).not.toBe("#ffffff"); // amarillo → texto oscuro
     // Color inválido o vacío: el verde de Selichat.
-    expect(brandScale("verde")["600"]).toBe("#059669");
-    expect(brandScale(null)["600"]).toBe("#059669");
+    expect(brandScale("verde")["600"]).toBe("#568100");
+    expect(brandScale(null)["600"]).toBe("#568100");
+    expect(brandScale(null)["400"]).toBe("#8fc531");
   });
 
   it("los botones siempre se leen (texto en negrita: contraste ≥ 3)", () => {

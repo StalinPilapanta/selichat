@@ -4,22 +4,22 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /*
- * Color de la marca como variables: hoy verde Selichat; la tienda podrá cambiarlo
+ * Color de la marca como variables: hoy verde lima Selichat; la tienda podrá cambiarlo
  * (Ajustes → Marca) sin tocar componentes. Toda la app usa `brand-*`, nunca un verde fijo.
  */
 :root {
   color-scheme: light;
-  --brand-50: #ecfdf5;
-  --brand-100: #d1fae5;
-  --brand-200: #a7f3d0;
-  --brand-300: #6ee7b7;
-  --brand-400: #34d399;
-  --brand-500: #10b981;
-  --brand-600: #059669;
-  --brand-700: #047857;
-  --brand-800: #065f46;
-  --brand-900: #064e3b;
-  --brand-950: #022c22;
+  --brand-50: #f5fbe8;
+  --brand-100: #e8f5c8;
+  --brand-200: #d2eb9a;
+  --brand-300: #b8de7a;
+  --brand-400: #8fc531;
+  --brand-500: #74a823;
+  --brand-600: #568100;
+  --brand-700: #466a06;
+  --brand-800: #3a550b;
+  --brand-900: #31470e;
+  --brand-950: #182702;
   /* Texto sobre el color de la marca (blanco o casi negro según contraste). */
   --brand-ink: #ffffff;
 }
@@ -40,6 +40,21 @@
   --color-brand-900: var(--brand-900);
   --color-brand-950: var(--brand-950);
   --color-brand-ink: var(--brand-ink);
+  /*
+   * Grises de la app: toda la interfaz usa `zinc-*`; se reemplazan por grises azulados
+   * (fondo oscuro #030712, tarjetas #0e131b) para la paleta lima.
+   */
+  --color-zinc-50: #f9fafb;
+  --color-zinc-100: #f3f4f6;
+  --color-zinc-200: #e5e7eb;
+  --color-zinc-300: #d1d5db;
+  --color-zinc-400: #9ca3af;
+  --color-zinc-500: #6b7280;
+  --color-zinc-600: #4b5563;
+  --color-zinc-700: #374151;
+  --color-zinc-800: #1f2937;
+  --color-zinc-900: #0e131b;
+  --color-zinc-950: #030712;
   --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
 }
 

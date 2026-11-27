@@ -7,7 +7,10 @@
  *   hay, queda anotado en el historial del pedido).
  * - Respeta el horario de envío de la tienda: fuera de horario no se envía al momento y la tarea
  *   periódica lo manda cuando abre el horario (solo cambios de las últimas 72 h).
- * - Cada aviso sale una sola vez por pedido (order_events.payload.aviso).
+ * - Cada aviso sale una sola vez por pedido (order_events.payload.aviso). El recordatorio de
+ *   retiro es la excepción: sale una vez por día (payload.dia), en la primera pasada dentro del
+ *   horario de envío (por la mañana, al abrir), desde el día siguiente a la llegada a la agencia
+ *   y hasta que el cliente lo retire o el pedido cambie de etapa.
  */
 import { schema, withTenant } from "@chatea/db";
 import {
@@ -109,7 +112,28 @@ function templateVarCount(components: Record<string, unknown>[]) {
   return Math.max(0, ...[...text.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])));
 }
 
-type TenantCtx = { notices: OrderNotices; tienda: string; inHours: boolean };
+type TenantCtx = { notices: OrderNotices; tienda: string; inHours: boolean; timezone: string };
+
+/** Día local (AAAA-MM-DD) en la zona horaria de la tienda. */
+export const localDay = (d: Date, timeZone: string) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+
+/**
+ * ¿Toca el recordatorio de retiro hoy? Desde el día siguiente a la llegada a la agencia, una vez
+ * por día, y nunca el mismo día en que salió el aviso de llegada (para no enviar dos seguidos).
+ */
+export function pickupReminderDue(p: {
+  today: string;
+  arrivedDay: string;
+  arrivalNoticeDay: string | null;
+}) {
+  return p.arrivedDay < p.today && (!p.arrivalNoticeDay || p.arrivalNoticeDay < p.today);
+}
 
 async function tenantCtx(deps: NotifyDeps, tenantId: string, now: Date): Promise<TenantCtx | null> {
   const dropi = await loadDropi(deps, tenantId).catch(() => null);
@@ -127,7 +151,8 @@ async function tenantCtx(deps: NotifyDeps, tenantId: string, now: Date): Promise
       s?.timezone ?? "America/Guayaquil",
       now,
     );
-  return { notices, tienda: s?.brandName?.trim() || org?.name || "", inHours };
+  const timezone = s?.timezone ?? "America/Guayaquil";
+  return { notices, tienda: s?.brandName?.trim() || org?.name || "", inHours, timezone };
 }
 
 /** Envía un aviso si está activo y no se envió antes. Devuelve si se envió. */
@@ -137,6 +162,8 @@ async function send(
   o: OrderRow,
   kind: NoticeKind,
   ctx: TenantCtx,
+  /** Recordatorio diario: una vez por este día local (si no, una vez por pedido). */
+  day?: string,
 ): Promise<boolean> {
   const ev = ctx.notices.events[kind];
   const convId = o.conversationId;
@@ -146,7 +173,13 @@ async function send(
     const [done] = await tx
       .select({ id: orderEvents.id })
       .from(orderEvents)
-      .where(and(eq(orderEvents.orderId, o.id), sql`${orderEvents.payload}->>'aviso' = ${kind}`))
+      .where(
+        and(
+          eq(orderEvents.orderId, o.id),
+          sql`${orderEvents.payload}->>'aviso' = ${kind}`,
+          day ? sql`${orderEvents.payload}->>'dia' = ${day}` : undefined,
+        ),
+      )
       .limit(1);
     if (done) return null;
     const [c] = await tx
@@ -206,7 +239,7 @@ async function send(
         source: "sistema",
         stage: o.stage,
         message: `No se envió el aviso «${info.label}»: pasaron más de 24 h desde el último mensaje del cliente y no hay plantilla configurada.`,
-        payload: { aviso: kind, enviado: false },
+        payload: { aviso: kind, enviado: false, ...(day ? { dia: day } : {}) },
       }),
     );
     return false;
@@ -226,7 +259,7 @@ async function send(
       message: ok
         ? `Aviso «${info.label}» enviado por WhatsApp${toSend.kind === "template" ? " (plantilla)" : ""}.`
         : `Falló el aviso «${info.label}» por WhatsApp.`,
-      payload: { aviso: kind, enviado: ok },
+      payload: { aviso: kind, enviado: ok, ...(day ? { dia: day } : {}) },
     }),
   );
   return ok;
@@ -268,9 +301,22 @@ export async function notifyStage(
   return o ? send(deps, tenantId, o, kind, ctx) : false;
 }
 
+/** Cuándo salió (o se intentó) por última vez un aviso del pedido. */
+async function lastNoticeAt(deps: NotifyDeps, tenantId: string, orderId: string, kind: NoticeKind) {
+  const [e] = await withTenant(deps.db, tenantId, (tx) =>
+    tx
+      .select({ at: orderEvents.createdAt })
+      .from(orderEvents)
+      .where(and(eq(orderEvents.orderId, orderId), sql`${orderEvents.payload}->>'aviso' = ${kind}`))
+      .orderBy(desc(orderEvents.createdAt))
+      .limit(1),
+  );
+  return e?.at ?? null;
+}
+
 /**
- * Tarea periódica: avisos pendientes (los que cayeron fuera de horario) y recordatorios de
- * retiro cuando el pedido sigue en la agencia después de los días indicados.
+ * Tarea periódica: avisos pendientes (los que cayeron fuera de horario) y el recordatorio
+ * diario de retiro mientras el pedido siga en la agencia.
  */
 export async function runOrderNotices(deps: NotifyDeps, now = new Date()) {
   const tenants = await deps.db.select({ tenantId: dropiRoutes.tenantId }).from(dropiRoutes);
@@ -293,13 +339,16 @@ export async function runOrderNotices(deps: NotifyDeps, now = new Date()) {
       const since = await stageSince(deps, tenantId, o);
       const age = now.getTime() - since.getTime();
       if (age <= RECENT_MS && (await send(deps, tenantId, o, kind, ctx))) sent++;
-      if (
-        kind === "retiro" &&
-        ctx.notices.events.recordatorio.enabled &&
-        age >= ctx.notices.recordatorioDias * 86400_000 &&
-        (await send(deps, tenantId, o, "recordatorio", ctx))
-      )
-        sent++;
+      if (kind === "retiro" && ctx.notices.events.recordatorio.enabled) {
+        const today = localDay(now, ctx.timezone);
+        const arrival = await lastNoticeAt(deps, tenantId, o.id, "retiro");
+        const due = pickupReminderDue({
+          today,
+          arrivedDay: localDay(since, ctx.timezone),
+          arrivalNoticeDay: arrival ? localDay(arrival, ctx.timezone) : null,
+        });
+        if (due && (await send(deps, tenantId, o, "recordatorio", ctx, today))) sent++;
+      }
     }
   }
   return { sent };

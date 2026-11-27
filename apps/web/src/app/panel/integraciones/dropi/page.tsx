@@ -636,20 +636,11 @@ function NoticesCard({
             templates={templates}
             extra={
               k === "recordatorio" ? (
-                <label className="block text-sm">
-                  <span className="label">Recordar si no lo retira en</span>
-                  <select
-                    className="input"
-                    value={notices.recordatorioDias}
-                    onChange={(e) => onChange({ recordatorioDias: Number(e.target.value) })}
-                  >
-                    {[1, 2, 3, 4, 5, 7].map((d) => (
-                      <option key={d} value={d}>
-                        {d} día{d === 1 ? "" : "s"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <p className="text-sm text-zinc-500">
+                  Se envía una vez al día, por la mañana al abrir tu horario de envío, desde el día
+                  siguiente a la llegada y hasta que el cliente lo retire. Pasadas 24 h desde su
+                  último mensaje, solo sale con la plantilla aprobada.
+                </p>
               ) : null
             }
           />

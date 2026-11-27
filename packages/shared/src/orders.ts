@@ -112,14 +112,14 @@ export const NOTICE_INFO: Record<
   },
   retiro: {
     label: "Llegó a la agencia",
-    when: "Cuando queda para retiro en la agencia u oficina",
+    when: "Apenas llega a la agencia (si es fuera de tu horario de envío, al abrir)",
     stage: "en_oficina",
     defaultText:
       "¡Hola {nombre}! 😊 Tu pedido de {producto} ya llegó a {agencia}\n📍 {direccion_agencia}\n🕒 {horario}\n\nAcércate con tu cédula y el valor a pagar: {total}. Guía: {guia}",
   },
   recordatorio: {
     label: "Recordatorio de retiro",
-    when: "Si sigue en la agencia sin retirar después de los días indicados",
+    when: "Cada mañana, al abrir tu horario de envío, desde el día siguiente a la llegada y hasta que lo retire",
     stage: "en_oficina",
     defaultText:
       "¡Hola {nombre}! Te recordamos que tu pedido de {producto} sigue esperándote en {agencia}\n📍 {direccion_agencia}\n\nRetíralo pronto para que no se devuelva 🙏",
@@ -282,7 +282,10 @@ export const orderNoticesSchema = z.preprocess(
         entregado: OFF,
         novedad: OFF,
       }),
-    /** Días en la agencia sin retirar para el recordatorio. */
+    /**
+     * Ya no se usa: el recordatorio de retiro sale cada mañana desde el día siguiente a la
+     * llegada. Se conserva para leer configuraciones guardadas.
+     */
     recordatorioDias: z.number().int().min(1).max(15).default(2),
     idioma: z.string().trim().max(10).default("es"),
     /**
