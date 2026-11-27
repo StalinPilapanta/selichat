@@ -21,7 +21,7 @@ import {
   referenciasDeLugar,
 } from "./carriers/agencias-geo.js";
 import { findAgencies, resolveAgency } from "./carriers/servientrega.js";
-import type { DropiApi } from "./dropi/client.js";
+import { catalogProductFrom, type DropiApi } from "./dropi/client.js";
 import { DropiMcpClient, parseToon, REAUTH_MESSAGE } from "./dropi/mcp.js";
 import { localDay, pickupReminderDue } from "./orders/notify.js";
 import {
@@ -1140,6 +1140,63 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     expect(up.order.stage).toBe("por_confirmar");
   });
 
+  it("pedido desde la conversación: se corrige con el formulario, se sube y se crea de nuevo", async () => {
+    history = [];
+    const s = await store(
+      "desde-chat",
+      { autoUpload: false },
+      {
+        name: "Colágeno",
+        price: "30.00",
+        currency: "USD",
+        dropiProductId: "777",
+        offers: [{ quantity: 2, totalPrice: "50.00", label: "2 frascos" }],
+        triggers: [{ kind: "keyword", value: "colageno" }],
+      },
+      `${DROPI_TOKEN}-tienda-chat`,
+    );
+    await inbound(s, "593995554433", "info del colageno");
+    const [order] = (await h.call(s.cookie, "GET", "/api/orders")).json();
+    expect(order.stage).toBe("pendiente_subida");
+    const [product] = (await h.call(s.cookie, "GET", "/api/products")).json();
+    const customer = {
+      nombre: "Rosa",
+      apellido: "Paz",
+      telefono: "0995554433",
+      provincia: "Pichincha",
+      ciudad: "Quito",
+      direccion: "Av. 6 de Diciembre N34",
+    };
+
+    // Revisar y subir: se corrigen datos, cantidad y se sube en el mismo paso.
+    const before = dropiOrders.length;
+    const put = await h.call(s.cookie, "PUT", `/api/orders/${order.id}`, {
+      customer,
+      items: [{ productId: product.id, quantity: 2 }],
+      upload: true,
+    });
+    expect(put.statusCode, put.body).toBe(200);
+    expect(put.json().result.status).toBe("subido");
+    expect(put.json().order).toMatchObject({ total: "50.00", stage: "por_confirmar" });
+    expect(dropiOrders).toHaveLength(before + 1);
+    expect(dropiOrders.at(-1)).toMatchObject({ surname: "Paz", total_order: 50 });
+
+    // Ya está en Dropi: no se puede corregir desde Selichat.
+    const again = await h.call(s.cookie, "PUT", `/api/orders/${order.id}`, {
+      customer,
+      items: [{ productId: product.id, quantity: 1 }],
+    });
+    expect(again.statusCode).toBe(409);
+
+    // Con un pedido abierto, no se crea otro para la misma conversación.
+    const dup = await h.call(s.cookie, "POST", "/api/orders", {
+      customer,
+      items: [{ productId: product.id, quantity: 1 }],
+      conversationId: order.conversationId,
+    });
+    expect(dup.statusCode).toBe(409);
+  });
+
   it("pedido ingresado a mano: oferta del catálogo, sube a Dropi y aparece en el Inicio", async () => {
     history = [];
     const s = await store(
@@ -1506,5 +1563,37 @@ describe("recordatorio de retiro en agencia", () => {
   it("el día se cuenta en la hora de la tienda", () => {
     // 03:00 UTC del 11 = 22:00 del 10 en Guayaquil.
     expect(localDay(new Date("2026-11-11T03:00:00Z"), "America/Guayaquil")).toBe("2026-11-10");
+  });
+});
+
+describe("importar productos de Dropi", () => {
+  it("toma nombre, precios, foto, stock y variantes del catálogo", () => {
+    const p = catalogProductFrom({
+      id: 140635,
+      sku: "LR89888",
+      name: "SERUM  COLAGENO PARA OJOS",
+      sale_price: 8,
+      suggested_price: 19.99,
+      stock: 198,
+      categories: ["Hogar", "Belleza"],
+      gallery: [{ urlS3: "https://cdn.example/p/140635.jpg" }],
+      variations: [
+        { id: 55, attribute_values: [{ value: "Rojo" }, { value: "M" }], suggested_price: 21 },
+        { id: 56, attributes: { color: "Azul" } },
+      ],
+    });
+    expect(p).toMatchObject({
+      id: "140635",
+      name: "SERUM COLAGENO PARA OJOS",
+      cost: 8,
+      suggestedPrice: 19.99,
+      stock: 198,
+      imageUrl: "https://cdn.example/p/140635.jpg",
+      categories: ["Hogar", "Belleza"],
+    });
+    expect(p.variations).toEqual([
+      { id: "55", name: "Rojo / M", price: 21 },
+      { id: "56", name: "Azul", price: null },
+    ]);
   });
 });

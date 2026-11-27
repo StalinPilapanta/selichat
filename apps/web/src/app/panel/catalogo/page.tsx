@@ -41,11 +41,11 @@ export default function Page() {
         <Link href="/panel/catalogo/nuevo" className="btn">
           Nuevo producto
         </Link>
-        <Link href="/panel/catalogo/nuevo?ia=1" className="btn-ghost">
-          Crear con IA desde la ficha
+        <Link href="/panel/catalogo/nuevo?ia=1" className="btn-secondary">
+          Crear con IA
         </Link>
         <Link href="/panel/catalogo/importar" className="btn-ghost">
-          Importar desde Chatea Pro
+          Importar de Dropi o Chatea Pro
         </Link>
       </div>
       <ErrorText>{error}</ErrorText>

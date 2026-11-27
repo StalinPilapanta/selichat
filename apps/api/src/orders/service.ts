@@ -2,7 +2,7 @@
  * Pedidos: se crean cuando el cliente confirma (IA o asesor), se suben a Dropi y Dropi
  * devuelve los cambios de estado por webhook.
  */
-import { type Database, schema, withTenant } from "@chatea/db";
+import { type Database, schema, type Tx, withTenant } from "@chatea/db";
 import {
   type CheckoutState,
   DROPI_COUNTRIES,
@@ -628,63 +628,101 @@ export interface ManualOrderInput {
   total?: number;
   rateType: "CON RECAUDO" | "SIN RECAUDO";
   notes: string;
+  /** Pedido armado desde una conversación: queda ligado a ella y a su contacto. */
+  conversationId?: string;
 }
 
+/** Líneas con el precio del catálogo (ofertas, variantes) y el total cobrado. */
+async function priceManual(tx: Tx, input: ManualOrderInput, fallbackCurrency: string) {
+  const lines: OrderItem[] = [];
+  let sum = 0;
+  let currency = fallbackCurrency;
+  for (const it of input.items) {
+    const product = await loadProduct(tx, it.productId);
+    if (!product) throw new OrderError("Uno de los productos ya no existe.");
+    const { total, variant } = priceLine(product, it.quantity, it.variant);
+    sum += total;
+    currency = product.currency || currency;
+    lines.push({
+      productId: product.id,
+      name: product.name,
+      quantity: it.quantity,
+      unitPrice: (total / it.quantity).toFixed(2),
+      dropiProductId: product.dropiProductId,
+      dropiVariationId: variant?.dropiVariationId ?? null,
+      variant: variant?.name ?? it.variant,
+    });
+  }
+  const total = input.total ?? sum;
+  // Total escrito a mano: se reparte en las líneas para que Dropi reciba el mismo monto.
+  if (input.total !== undefined && sum > 0)
+    for (const l of lines) l.unitPrice = ((Number(l.unitPrice) * total) / sum).toFixed(2);
+  return { lines, total, currency };
+}
+
+const manualNotes = (input: ManualOrderInput) =>
+  [
+    input.customer.agencia && `RETIRO EN AGENCIA: ${input.customer.agencia.split("---")[0]}`,
+    input.notes,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+const countryOf = (settings: { country?: string | null } | undefined) =>
+  (settings?.country && settings.country in DROPI_COUNTRIES
+    ? settings.country
+    : "EC") as DropiCountry;
+
 /**
- * Pedido ingresado a mano desde Pedidos (llamada, local, otra red), sin conversación.
- * El contacto se crea o reutiliza por teléfono para que su historial quede junto.
+ * Pedido ingresado a mano: desde Pedidos (llamada, local, otra red) o desde una conversación
+ * con los datos que juntó el chat. Sin conversación, el contacto se crea o reutiliza por
+ * teléfono para que su historial quede junto.
  */
 export async function createManualOrder(db: Database, tenantId: string, input: ManualOrderInput) {
   return withTenant(db, tenantId, async (tx) => {
     const [settings] = await tx.select().from(tenantSettings);
-    const country = (
-      settings?.country && settings.country in DROPI_COUNTRIES ? settings.country : "EC"
-    ) as DropiCountry;
+    const country = countryOf(settings);
     const national = nationalPhone(input.customer.telefono, country);
     if (national.length < 6) throw new OrderError("El teléfono no parece válido.");
+    const { lines, total, currency } = await priceManual(tx, input, settings?.currency || "USD");
 
-    const lines: OrderItem[] = [];
-    let sum = 0;
-    let currency = settings?.currency || "USD";
-    for (const it of input.items) {
-      const product = await loadProduct(tx, it.productId);
-      if (!product) throw new OrderError("Uno de los productos ya no existe.");
-      const { total, variant } = priceLine(product, it.quantity, it.variant);
-      sum += total;
-      currency = product.currency || currency;
-      lines.push({
-        productId: product.id,
-        name: product.name,
-        quantity: it.quantity,
-        unitPrice: (total / it.quantity).toFixed(2),
-        dropiProductId: product.dropiProductId,
-        dropiVariationId: variant?.dropiVariationId ?? null,
-        variant: variant?.name ?? it.variant,
-      });
+    let contactId: string | null = null;
+    if (input.conversationId) {
+      const [conv] = await tx
+        .select({ contactId: conversations.contactId })
+        .from(conversations)
+        .where(eq(conversations.id, input.conversationId));
+      if (!conv) throw new OrderError("La conversación no existe.");
+      const [open] = await tx
+        .select({ id: orders.id })
+        .from(orders)
+        .where(
+          and(eq(orders.conversationId, input.conversationId), inArray(orders.stage, ORDER_OPEN)),
+        );
+      if (open) throw new OrderError("Esta conversación ya tiene un pedido abierto.");
+      contactId = conv.contactId;
+    } else {
+      const name = [input.customer.nombre, input.customer.apellido].join(" ").trim();
+      const [contact] = await tx
+        .insert(contacts)
+        .values({
+          phone: DROPI_COUNTRIES[country].dial + national,
+          name: name || null,
+          city: input.customer.ciudad || null,
+        })
+        .onConflictDoUpdate({
+          target: [contacts.tenantId, contacts.phone],
+          set: { updatedAt: new Date() },
+        })
+        .returning({ id: contacts.id });
+      contactId = contact?.id ?? null;
     }
-    const total = input.total ?? sum;
-    // Total escrito a mano: se reparte en las líneas para que Dropi reciba el mismo monto.
-    if (input.total !== undefined && sum > 0)
-      for (const l of lines) l.unitPrice = ((Number(l.unitPrice) * total) / sum).toFixed(2);
-
-    const name = [input.customer.nombre, input.customer.apellido].join(" ").trim();
-    const [contact] = await tx
-      .insert(contacts)
-      .values({
-        phone: DROPI_COUNTRIES[country].dial + national,
-        name: name || null,
-        city: input.customer.ciudad || null,
-      })
-      .onConflictDoUpdate({
-        target: [contacts.tenantId, contacts.phone],
-        set: { updatedAt: new Date() },
-      })
-      .returning({ id: contacts.id });
 
     const [order] = await tx
       .insert(orders)
       .values({
-        contactId: contact?.id ?? null,
+        contactId,
+        conversationId: input.conversationId ?? null,
         productId: lines[0]?.productId ?? null,
         source: "humano",
         customer: { ...input.customer, telefono: national },
@@ -692,20 +730,73 @@ export async function createManualOrder(db: Database, tenantId: string, input: M
         total: total.toFixed(2),
         currency,
         rateType: input.rateType,
-        notes: [
-          input.customer.agencia && `RETIRO EN AGENCIA: ${input.customer.agencia.split("---")[0]}`,
-          input.notes,
-        ]
-          .filter(Boolean)
-          .join(" · "),
+        notes: manualNotes(input),
       })
       .returning();
     if (!order) throw new OrderError("No se pudo crear el pedido.");
+    if (input.conversationId) {
+      // Pedido = lead ganado; con pedido no siguen los recordatorios de venta.
+      await advanceLead(tx, input.conversationId, "ganado", { force: true });
+      await tx
+        .update(conversations)
+        .set({
+          checkoutState: sql`coalesce(${conversations.checkoutState}, '{}'::jsonb) || '{"etapa":"confirmado"}'::jsonb`,
+        })
+        .where(eq(conversations.id, input.conversationId));
+    }
     await tx.insert(orderEvents).values({
       orderId: order.id,
       source: "humano",
       stage: order.stage,
-      message: "Pedido ingresado a mano por un asesor.",
+      message: input.conversationId
+        ? "Pedido creado por un asesor desde la conversación."
+        : "Pedido ingresado a mano por un asesor.",
+    });
+    return order;
+  });
+}
+
+/**
+ * Corrige un pedido que aún no está en Dropi (por subir, con error o en revisión) con los
+ * mismos datos del formulario de pedido. Un pedido con error vuelve a «Por subir».
+ */
+export async function updateManualOrder(
+  db: Database,
+  tenantId: string,
+  orderId: string,
+  input: ManualOrderInput,
+) {
+  return withTenant(db, tenantId, async (tx) => {
+    const [current] = await tx.select().from(orders).where(eq(orders.id, orderId));
+    if (!current) throw new OrderError("El pedido no existe.");
+    if (current.dropiOrderId || !LOCAL_STAGES.includes(current.stage as OrderStage))
+      throw new OrderError("El pedido ya está en Dropi: los cambios se hacen allá.");
+    const [settings] = await tx.select().from(tenantSettings);
+    const national = nationalPhone(input.customer.telefono, countryOf(settings));
+    if (national.length < 6) throw new OrderError("El teléfono no parece válido.");
+    const { lines, total, currency } = await priceManual(tx, input, current.currency);
+    const stage: OrderStage =
+      current.stage === "error_subida" ? "pendiente_subida" : (current.stage as OrderStage);
+    const [order] = await tx
+      .update(orders)
+      .set({
+        productId: lines[0]?.productId ?? null,
+        customer: { ...input.customer, telefono: national },
+        items: lines,
+        total: total.toFixed(2),
+        currency,
+        rateType: input.rateType,
+        notes: manualNotes(input),
+        stage,
+        uploadError: null,
+      })
+      .where(eq(orders.id, orderId))
+      .returning();
+    await tx.insert(orderEvents).values({
+      orderId,
+      source: "humano",
+      stage,
+      message: "Datos del pedido corregidos por un asesor.",
     });
     return order;
   });

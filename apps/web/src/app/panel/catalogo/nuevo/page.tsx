@@ -1,12 +1,14 @@
 "use client";
-import { PackagePlus } from "lucide-react";
+import { PackagePlus, Truck } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import { DropiPicker } from "@/components/catalog/DropiPicker";
 import { emptyProduct, ProductEditor, type ProductForm } from "@/components/catalog/ProductEditor";
 import type { PromptDraft } from "@/components/PromptEditor";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
+import { type DropiCatalogProduct, dropiSourceText, formFromDropi } from "@/lib/dropi-catalog";
 
 type Draft = {
   name: string;
@@ -29,6 +31,18 @@ function NewProduct() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [key, setKey] = useState(0);
+  /** Producto de Dropi elegido: sus datos (ID, foto, precio, variantes) se conservan. */
+  const [dropi, setDropi] = useState<DropiCatalogProduct | null>(null);
+  const [showDropi, setShowDropi] = useState(false);
+
+  function pickDropi(p: DropiCatalogProduct) {
+    setDropi(p);
+    setShowDropi(false);
+    setForm((f) => formFromDropi(p, f ?? emptyProduct(currency ?? "USD")));
+    setKey((k) => k + 1);
+    // Con IA: la ficha arranca con lo que trae Dropi; se puede completar antes de generar.
+    if (wantsAi) setSource((s) => (s.trim() ? s : dropiSourceText(p)));
+  }
 
   useEffect(() => {
     api<{ currency: string; country: string } | null>("/api/settings")
@@ -44,12 +58,15 @@ function NewProduct() {
     setError("");
     try {
       const d = await api<Draft>("/api/ai/generate-product", { method: "POST", body: { source } });
-      const base = emptyProduct(currency ?? "USD");
+      // Si se eligió de Dropi, se conservan su ID, foto y variantes.
+      const base = dropi
+        ? formFromDropi(dropi, emptyProduct(currency ?? "USD"))
+        : emptyProduct(currency ?? "USD");
       setForm({
         ...base,
         name: d.name,
         description: d.description,
-        price: d.price,
+        price: d.price || base.price,
         initialMessage: d.initialMessage,
         entryQuestion: d.entryQuestion,
         offers: d.offers
@@ -68,7 +85,35 @@ function NewProduct() {
 
   return (
     <>
-      <PageHeader icon={PackagePlus} title="Nuevo producto" />
+      <div className="mb-2 text-sm">
+        <Link href="/panel/catalogo" className="text-zinc-500 hover:underline">
+          ← Catálogo
+        </Link>
+      </div>
+      <PageHeader icon={PackagePlus} title={wantsAi ? "Nuevo producto con IA" : "Nuevo producto"} />
+      <div className="card mb-6 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
+              <Truck className="size-5" />
+            </span>
+            <div>
+              <div className="font-medium">¿El producto está en Dropi?</div>
+              <p className="text-sm text-zinc-500">
+                {dropi
+                  ? `Usando «${dropi.name}» (ID ${dropi.id}): nombre, precio sugerido, foto y variantes ya están cargados${wantsAi ? " y la ficha para la IA arranca con sus datos" : ""}.`
+                  : "Trae su nombre, precio sugerido, foto, ID y variantes con el ID o el nombre del producto en Dropi."}
+              </p>
+            </div>
+          </div>
+          {!showDropi && (
+            <button type="button" className="btn-secondary" onClick={() => setShowDropi(true)}>
+              {dropi ? "Cambiar producto" : "Importar desde Dropi"}
+            </button>
+          )}
+        </div>
+        {showDropi && <DropiPicker onPick={pickDropi} actionLabel="Usar sus datos" />}
+      </div>
       {wantsAi && (
         <div className="card mb-6 space-y-3">
           <div className="font-medium">Crear con IA desde la ficha</div>

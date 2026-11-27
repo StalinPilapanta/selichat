@@ -11,7 +11,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { DROPI_COUNTRIES, type DropiCountry } from "@chatea/shared";
 import {
+  catalogProductFrom,
   type DropiApi,
+  type DropiCatalogProduct,
   type DropiCity,
   type DropiDepartment,
   DropiError,
@@ -615,6 +617,20 @@ export class DropiMcpClient implements DropiApi {
         };
     }
     return null;
+  }
+
+  /** Busca en el catálogo de Dropi por nombre o por ID (el ID también entra como texto). */
+  async searchProducts(query: string): Promise<DropiCatalogProduct[]> {
+    const q = query.trim();
+    if (!q) return [];
+    const list = items(
+      await this.call("list_products", { search: q, get_stock: true, page_size: 20 }),
+    );
+    const found = list.map(catalogProductFrom).filter((p) => p.id && p.name);
+    // Por ID: primero el que coincide exacto.
+    return /^\d+$/.test(q)
+      ? [...found.filter((p) => p.id === q), ...found.filter((p) => p.id !== q)]
+      : found;
   }
 
   async getOrder(id: string): Promise<DropiOrderStatus | null> {

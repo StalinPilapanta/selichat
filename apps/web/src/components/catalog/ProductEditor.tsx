@@ -35,6 +35,17 @@ export type ProductForm = Required<
 > & {
   imageUrl: string;
   dropiProductId: string;
+  /**
+   * Variantes (vienen de Dropi o de Chatea Pro). No se editan en pantalla, pero se conservan al
+   * guardar: sin esto, editar el producto las borraba.
+   */
+  variantType: "SIMPLE" | "VARIABLE";
+  variants: {
+    name: string;
+    attributes: Record<string, string>;
+    price: string | null;
+    dropiVariationId: string | null;
+  }[];
   offers: Offer[];
   media: Media[];
   faqs: Faq[];
@@ -52,6 +63,8 @@ export const emptyProduct = (currency: string): ProductForm => ({
   currency,
   imageUrl: "",
   dropiProductId: "",
+  variantType: "SIMPLE",
+  variants: [],
   initialMessage: "",
   entryQuestion: "",
   offers: [],
@@ -76,6 +89,8 @@ export function toForm(p: any): ProductForm {
     currency: p.currency,
     imageUrl: p.imageUrl ?? "",
     dropiProductId: p.dropiProductId ?? "",
+    variantType: p.variantType === "VARIABLE" ? "VARIABLE" : "SIMPLE",
+    variants: pick(p.variants ?? [], ["name", "attributes", "price", "dropiVariationId"]),
     initialMessage: p.initialMessage,
     entryQuestion: p.entryQuestion,
     offers: pick(p.offers, ["quantity", "totalPrice", "label", "featured", "freeShipping"]),

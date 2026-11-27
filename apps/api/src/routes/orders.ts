@@ -39,6 +39,7 @@ import {
   type OnStage,
   OrderError,
   readDropiConfig,
+  updateManualOrder,
   uploadOrder,
   writeDropiConfig,
 } from "../orders/service.js";
@@ -120,6 +121,8 @@ const manualOrder = z.object({
   notes: z.string().trim().max(1000).default(""),
   /** Subirlo a Dropi apenas se guarda. */
   upload: z.boolean().default(false),
+  /** Pedido armado desde la ficha de una conversación. */
+  conversationId: z.uuid().optional(),
 });
 
 export async function orderRoutes(
@@ -470,6 +473,61 @@ export async function orderRoutes(
       throw e;
     }
   });
+
+  /** Corrige un pedido que aún no está en Dropi y, si se pide, lo sube con los datos nuevos. */
+  app.put<{ Params: { id: string } }>(
+    "/api/orders/:id",
+    { preHandler: anyMember },
+    async (req, reply) => {
+      if (!isUuid(req.params.id)) return reply.code(404).send({ error: "no_existe" });
+      const body = manualOrder.omit({ conversationId: true }).safeParse(req.body);
+      if (!body.success)
+        return reply.code(400).send({
+          error: "datos_invalidos",
+          detail: body.error.issues[0]?.message,
+          issues: body.error.issues,
+        });
+      const { upload, ...input } = body.data;
+      try {
+        await updateManualOrder(db, req.ctx.tenantId, req.params.id, input);
+        const result = upload
+          ? await uploadOrder(deps, req.ctx.tenantId, req.params.id, { actor: "humano" })
+          : null;
+        return { result, order: await loadOrder(req.ctx.tenantId, req.params.id) };
+      } catch (e) {
+        if (e instanceof OrderError)
+          return reply.code(409).send({ error: "no_se_puede", message: e.message });
+        throw e;
+      }
+    },
+  );
+
+  /**
+   * Catálogo de Dropi para importar productos: por nombre o por ID (con token, solo por ID).
+   * `unavailable`: sin Dropi conectado o la cuenta no permite buscar.
+   */
+  app.get<{ Querystring: { q?: string } }>(
+    "/api/dropi/products",
+    { preHandler: anyMember },
+    async (req, reply) => {
+      const q = (req.query.q ?? "").trim().slice(0, 80);
+      if (q.length < 2) return reply.code(400).send({ error: "busqueda_corta" });
+      const dropi = await loadDropi(deps, req.ctx.tenantId).catch(() => null);
+      if (!dropi) return { products: [], mode: null, unavailable: "sin_dropi" };
+      const search = dropi.client.searchProducts?.bind(dropi.client);
+      if (!search) return { products: [], mode: dropi.client.mode, unavailable: "sin_busqueda" };
+      try {
+        const products = await search(q);
+        return { products, mode: dropi.client.mode };
+      } catch (e) {
+        req.log.warn({ err: e }, "no se pudo buscar en el catálogo de Dropi");
+        return reply.code(502).send({
+          error: "dropi_no_responde",
+          message: e instanceof DropiError ? e.message : "Dropi no respondió. Intenta de nuevo.",
+        });
+      }
+    },
+  );
 
   /** Provincias y ciudades de Dropi para el formulario de pedido (ciudad según provincia). */
   app.get("/api/places", { preHandler: anyMember }, async (req, reply) => {

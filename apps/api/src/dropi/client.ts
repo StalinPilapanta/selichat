@@ -64,6 +64,23 @@ export interface DropiProductInfo {
   cost: number | null;
 }
 
+/** Producto del catálogo de Dropi, para importarlo a Selichat. */
+export interface DropiCatalogProduct {
+  id: string;
+  name: string;
+  sku: string;
+  description: string;
+  /** Precio de proveedor (lo que cobra Dropi). */
+  cost: number | null;
+  /** Precio de venta sugerido por el proveedor. */
+  suggestedPrice: number | null;
+  stock: number | null;
+  imageUrl: string;
+  images: string[];
+  categories: string[];
+  variations: { id: string; name: string; price: number | null }[];
+}
+
 /** Lo que Selichat usa de Dropi; lo implementan el cliente por token y el cliente MCP. */
 export interface DropiApi {
   readonly mode: "token" | "mcp";
@@ -97,6 +114,8 @@ export interface DropiApi {
   productInfo?(id: number, nameHint: string): Promise<DropiProductInfo | null>;
   getOrder?(id: string): Promise<DropiOrderStatus | null>;
   fingerprint?(phone: string): Promise<DropiFingerprint>;
+  /** Productos del catálogo de Dropi por nombre o por ID (para importar). */
+  searchProducts?(query: string): Promise<DropiCatalogProduct[]>;
 }
 
 export interface DropiOrderPayload {
@@ -140,6 +159,56 @@ export function rows(j: unknown, depth = 0): Json[] {
 }
 
 const str = (v: unknown) => (v == null ? "" : String(v));
+
+/** Nombre de una variación de Dropi: sus atributos (talla, color…) o su id. */
+function variationName(v: Json): string {
+  const vals: string[] = [];
+  const attrs = v.attribute_values ?? v.attributes ?? v.attributes_values;
+  if (Array.isArray(attrs))
+    for (const a of attrs) {
+      if (isObj(a)) vals.push(String(a.value ?? a.name ?? "").trim());
+      else if (a != null) vals.push(String(a).trim());
+    }
+  else if (isObj(attrs)) for (const x of Object.values(attrs)) vals.push(String(x ?? "").trim());
+  const name = vals.filter(Boolean).join(" / ") || String(v.name ?? "").trim();
+  return name || `Variación ${String(v.id ?? "")}`;
+}
+
+/** Producto de Dropi (MCP o API) → lo que Selichat importa. */
+export function catalogProductFrom(p: Json): DropiCatalogProduct {
+  const n = (v: unknown) => {
+    const x = Number(v);
+    return v == null || v === "" || Number.isNaN(x) ? null : x;
+  };
+  const gallery = Array.isArray(p.gallery) ? p.gallery : Array.isArray(p.photos) ? p.photos : [];
+  const images = gallery
+    .map((g) => (isObj(g) ? String(g.urlS3 ?? g.url ?? g.src ?? "") : String(g ?? "")))
+    .filter((u) => /^https?:\/\//.test(u));
+  const cats = Array.isArray(p.categories) ? p.categories : [];
+  const vars = Array.isArray(p.variations) ? p.variations : [];
+  return {
+    id: String(p.id ?? ""),
+    name: String(p.name ?? "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    sku: String(p.sku ?? ""),
+    description: String(p.description ?? "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+    cost: n(p.sale_price ?? p.price),
+    suggestedPrice: n(p.suggested_price),
+    stock: n(p.stock),
+    imageUrl: images[0] ?? "",
+    images,
+    categories: cats.map((c) => (isObj(c) ? String(c.name ?? "") : String(c))).filter(Boolean),
+    variations: vars.filter(isObj).map((v) => ({
+      id: String(v.id ?? ""),
+      name: variationName(v),
+      price: n(v.suggested_price ?? v.sale_price),
+    })),
+  };
+}
 const num = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -313,6 +382,15 @@ export class DropiClient implements DropiApi {
       phone: str(o.phone ?? o.client_phone ?? o.customer_phone),
       createdAt: str(o.created_at),
     }));
+  }
+
+  /** Con token solo se busca por ID (el API de integraciones no tiene búsqueda por nombre). */
+  async searchProducts(query: string): Promise<DropiCatalogProduct[]> {
+    const id = query.trim();
+    if (!/^\d+$/.test(id)) return [];
+    const d = await this.call<Json>("GET", `products/v2/${encodeURIComponent(id)}`);
+    const p = isObj(d.objects) ? d.objects : null;
+    return p ? [catalogProductFrom(p)] : [];
   }
 
   async product(id: string): Promise<{ id: string; name: string; type: string } | null> {

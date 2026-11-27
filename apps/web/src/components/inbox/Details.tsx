@@ -5,12 +5,15 @@ import {
   type CheckoutField,
   displayPhone,
   formatPhone,
+  LOCAL_STAGES,
   ORDER_STAGES,
   type OrderStage,
 } from "@chatea/shared";
+import { Upload } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { type FingerprintData, FingerprintView } from "@/components/Fingerprint";
+import { type OrderFormInitial, OrderFormPanel } from "@/components/orders/OrderForm";
 import { api, errorMessage } from "@/lib/api";
 import { useSession } from "@/lib/auth-client";
 import type { ConversationDetail, TeamMember } from "./types";
@@ -119,6 +122,7 @@ export function Details({
           conversationId={conv.id}
           contactPhone={conv.contact.phone}
           productName={conv.productName}
+          productId={conv.productId}
         />
         <button
           type="button"
@@ -301,42 +305,128 @@ type LinkedOrder = {
   currency: string;
 };
 
+type OrderDetail = Omit<LinkedOrder, "items"> & {
+  customer: Record<string, string | undefined>;
+  items: { productId?: string; name: string; quantity: number; variant?: string }[];
+  rateType: string | null;
+  notes: string | null;
+};
+
+/** Número nacional para el formulario (593981112222 → 0981112222). */
+const nationalOf = (phone: string) => {
+  const d = phone.replace(/\D/g, "");
+  return d.startsWith("593") ? `0${d.slice(3)}` : d;
+};
+
+/** Lo que juntó la conversación, como datos iniciales del formulario de pedido. */
+function fromCheckout(
+  st: Record<string, string>,
+  contactPhone: string,
+  productId: string | null,
+): OrderFormInitial {
+  const [nombre = "", ...rest] = (st.nombre ?? "").trim().split(/\s+/);
+  const qty = Number.parseInt(st.cantidad ?? "", 10);
+  return {
+    customer: {
+      nombre,
+      apellido: rest.join(" "),
+      telefono: nationalOf(st.telefono || contactPhone),
+      provincia: st.provincia ?? "",
+      ciudad: st.ciudad ?? "",
+      direccion: st.agencia ? st.agencia : (st.direccion ?? ""),
+      referencia: st.agencia ? "" : (st.referencia ?? ""),
+      ...(st.agencia ? { agencia: st.agencia } : {}),
+    },
+    lines: productId
+      ? [{ productId, quantity: qty > 0 && qty < 100 ? qty : 1, variant: st.variante ?? "" }]
+      : undefined,
+    notes: st.notas ?? "",
+  };
+}
+
+/** Un pedido guardado, como datos iniciales para corregirlo antes de subirlo. */
+function fromOrder(o: OrderDetail): OrderFormInitial {
+  const c = o.customer;
+  return {
+    customer: {
+      nombre: c.nombre ?? "",
+      apellido: c.apellido ?? "",
+      telefono: c.telefono ?? "",
+      provincia: c.provincia ?? "",
+      ciudad: c.ciudad ?? "",
+      direccion: c.direccion ?? "",
+      referencia: c.referencia ?? "",
+      ...(c.agencia ? { agencia: c.agencia } : {}),
+    },
+    lines: o.items
+      .filter((i) => i.productId)
+      .map((i) => ({
+        productId: i.productId as string,
+        quantity: i.quantity,
+        variant: i.variant ?? "",
+      })),
+    total: Number(o.total).toFixed(2),
+    rateType: o.rateType ?? "CON RECAUDO",
+    // La nota de retiro en agencia se vuelve a armar al guardar.
+    notes: (o.notes ?? "")
+      .split(" · ")
+      .filter((n) => !n.startsWith("RETIRO EN AGENCIA:"))
+      .join(" · "),
+  };
+}
+
 function OrderData({
   state,
   conversationId,
   contactPhone,
   productName,
+  productId,
 }: {
   state: Record<string, string>;
   conversationId: string;
   contactPhone: string;
   productName: string | null;
+  productId: string | null;
 }) {
   const fields = (Object.keys(CHECKOUT_FIELDS) as CheckoutField[]).filter((k) => state[k]?.trim());
   const [order, setOrder] = useState<LinkedOrder | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState<{ initial: OrderFormInitial; orderId?: string } | null>(null);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const confirmed = state.etapa;
+  const load = useCallback(
+    () =>
+      api<{ order: LinkedOrder | null }>(`/api/conversations/${conversationId}/order`)
+        .then((r) => setOrder(r.order))
+        .catch(() => setOrder(null)),
+    [conversationId],
+  );
   useEffect(() => {
     // Se vuelve a consultar cuando cambia la etapa (la IA pudo haber confirmado).
     void confirmed;
-    api<{ order: LinkedOrder | null }>(`/api/conversations/${conversationId}/order`)
-      .then((r) => setOrder(r.order))
-      .catch(() => setOrder(null));
-  }, [conversationId, confirmed]);
+    setNotice("");
+    load();
+  }, [load, confirmed]);
 
-  async function create() {
-    setBusy(true);
+  const open = order && order.stage !== "cancelado" ? order : null;
+  const local = open && !open.dropiOrderId && LOCAL_STAGES.includes(open.stage);
+
+  /** Abre el formulario: con lo del chat (nuevo) o con el pedido guardado (corregir y subir). */
+  async function openForm() {
     setError("");
+    if (!local || !open) {
+      setForm({ initial: fromCheckout(state, contactPhone, productId) });
+      return;
+    }
+    setOpening(true);
     try {
-      const o = await api<LinkedOrder>(`/api/conversations/${conversationId}/order`, {
-        method: "POST",
-      });
-      setOrder(o);
+      const d = await api<OrderDetail>(`/api/orders/${open.id}`);
+      setForm({ initial: fromOrder(d), orderId: open.id });
     } catch (e) {
       setError(errorMessage(e));
     } finally {
-      setBusy(false);
+      setOpening(false);
     }
   }
   return (
@@ -389,30 +479,64 @@ function OrderData({
       ) : (
         <p className="mt-1 text-xs text-zinc-500">La IA aún no registró datos.</p>
       )}
-      <div className="mt-2 border-t border-zinc-200 pt-2 text-xs dark:border-zinc-800">
-        {order && order.stage !== "cancelado" ? (
-          <Link
-            href="/panel/pedidos"
-            className="text-brand-700 hover:underline dark:text-brand-400"
-          >
-            {ORDER_STAGES[order.stage] ?? order.stage}
-            {order.dropiOrderId ? ` · Dropi #${order.dropiOrderId}` : ""} →
-          </Link>
-        ) : (
+      <div className="mt-2 space-y-2 border-t border-zinc-200 pt-2 text-xs dark:border-zinc-800">
+        {open && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="badge badge-neutral">
+              {ORDER_STAGES[open.stage] ?? open.stage}
+              {open.dropiOrderId ? ` · Dropi #${open.dropiOrderId}` : ""}
+            </span>
+            <Link
+              href={`/panel/pedidos?pedido=${open.id}`}
+              className="text-brand-700 hover:underline dark:text-brand-400"
+            >
+              Ver en Pedidos →
+            </Link>
+          </div>
+        )}
+        {open?.uploadError && <p className="text-red-600 dark:text-red-400">{open.uploadError}</p>}
+        {(!open || local) && (
           <button
             type="button"
-            className="text-brand-700 hover:underline disabled:opacity-50 dark:text-brand-400"
-            disabled={busy || !fields.length}
-            onClick={create}
+            className="btn h-8 w-full text-xs"
+            disabled={opening}
+            onClick={openForm}
           >
-            {busy ? "Creando…" : "Crear pedido con estos datos"}
+            <Upload className="size-3.5" />
+            {opening ? "Abriendo…" : open ? "Revisar y subir a Dropi" : "Crear pedido"}
           </button>
         )}
-        {order?.uploadError && order.stage !== "cancelado" && (
-          <p className="mt-1 text-red-600 dark:text-red-400">{order.uploadError}</p>
-        )}
-        {error && <p className="mt-1 text-red-600 dark:text-red-400">{error}</p>}
+        {notice && <p className="text-brand-700 dark:text-brand-400">{notice}</p>}
+        {error && <p className="text-red-600 dark:text-red-400">{error}</p>}
       </div>
+      {form && (
+        <OrderFormPanel
+          initial={form.initial}
+          orderId={form.orderId}
+          conversationId={conversationId}
+          uploadByDefault
+          title={form.orderId ? "Revisar y subir a Dropi" : "Crear pedido"}
+          subtitle={
+            form.orderId
+              ? "Revisa los datos antes de subirlos; puedes corregir lo que haga falta."
+              : "Con los datos que juntó la conversación. Revisa y corrige antes de guardar."
+          }
+          onClose={() => setForm(null)}
+          onCreated={(_id, result) => {
+            setForm(null);
+            setNotice(
+              !result
+                ? "Pedido guardado. Queda por subir a Dropi."
+                : result.status === "subido"
+                  ? "Pedido subido a Dropi."
+                  : result.status === "revision"
+                    ? "No se subió: quedó en «Revisar» para un dueño o administrador."
+                    : "Pedido guardado, pero no se pudo subir a Dropi: revisa el motivo.",
+            );
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }
