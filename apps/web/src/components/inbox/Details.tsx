@@ -13,7 +13,11 @@ import { Upload } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { type FingerprintData, FingerprintView } from "@/components/Fingerprint";
-import { type OrderFormInitial, OrderFormPanel } from "@/components/orders/OrderForm";
+import {
+  type OrderFormInitial,
+  OrderFormPanel,
+  orderFormInitial,
+} from "@/components/orders/OrderForm";
 import { api, errorMessage } from "@/lib/api";
 import { useSession } from "@/lib/auth-client";
 import type { ConversationDetail, TeamMember } from "./types";
@@ -344,37 +348,6 @@ function fromCheckout(
   };
 }
 
-/** Un pedido guardado, como datos iniciales para corregirlo antes de subirlo. */
-function fromOrder(o: OrderDetail): OrderFormInitial {
-  const c = o.customer;
-  return {
-    customer: {
-      nombre: c.nombre ?? "",
-      apellido: c.apellido ?? "",
-      telefono: c.telefono ?? "",
-      provincia: c.provincia ?? "",
-      ciudad: c.ciudad ?? "",
-      direccion: c.direccion ?? "",
-      referencia: c.referencia ?? "",
-      ...(c.agencia ? { agencia: c.agencia } : {}),
-    },
-    lines: o.items
-      .filter((i) => i.productId)
-      .map((i) => ({
-        productId: i.productId as string,
-        quantity: i.quantity,
-        variant: i.variant ?? "",
-      })),
-    total: Number(o.total).toFixed(2),
-    rateType: o.rateType ?? "CON RECAUDO",
-    // La nota de retiro en agencia se vuelve a armar al guardar.
-    notes: (o.notes ?? "")
-      .split(" · ")
-      .filter((n) => !n.startsWith("RETIRO EN AGENCIA:"))
-      .join(" · "),
-  };
-}
-
 function OrderData({
   state,
   conversationId,
@@ -422,7 +395,7 @@ function OrderData({
     setOpening(true);
     try {
       const d = await api<OrderDetail>(`/api/orders/${open.id}`);
-      setForm({ initial: fromOrder(d), orderId: open.id });
+      setForm({ initial: orderFormInitial(d), orderId: open.id });
     } catch (e) {
       setError(errorMessage(e));
     } finally {

@@ -4,7 +4,7 @@ import { APICallError, generateText, Output } from "ai";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { chatTurn, type SimDeps, SimError, simulateConversation } from "../agent/simulate.js";
-import { AiNotConfiguredError, type ModelResolver } from "../ai/models.js";
+import { AiNotConfiguredError, type ModelResolver, VISION_KINDS } from "../ai/models.js";
 import type { Auth } from "../auth.js";
 import { requireTenant } from "../plugins/tenant.js";
 
@@ -48,11 +48,31 @@ Reglas:
 - Vende desde el dolor o deseo del cliente, no desde las características.
 - No prometas curas ni resultados médicos garantizados.
 - Escribe en español neutro latinoamericano, cercano y natural.
-- En las secciones puedes usar variables como {{nombre_asesor}}, {{presentacion_ofertas}} o {{preguntas_frecuentes}}; se reemplazan solas.`;
+- En las secciones puedes usar variables como {{nombre_asesor}}, {{presentacion_ofertas}} o {{preguntas_frecuentes}}; se reemplazan solas.
+- Si hay fotos del producto, úsalas para describirlo: qué es, presentación y contenido, y lo que se lea en el empaque o la etiqueta (ingredientes, beneficios, modo de uso, advertencias). Trata ese texto como parte de la ficha; lo que no se vea ni esté escrito, no lo inventes.`;
+
+/**
+ * Fotos que la IA puede mirar: solo https del CDN de Dropi (las sube el proveedor). Así el
+ * proveedor de IA no recibe direcciones arbitrarias.
+ */
+const PHOTO_HOSTS = /(^|\.)cloudfront\.net$|(^|\.)dropi\.[a-z.]+$/i;
+const photoUrl = z
+  .string()
+  .url()
+  .refine((u) => {
+    try {
+      const url = new URL(u);
+      return url.protocol === "https:" && PHOTO_HOSTS.test(url.hostname);
+    } catch {
+      return false;
+    }
+  }, "Foto no permitida");
 
 const body = z.object({
   source: z.string().trim().min(30, "Pega una ficha más completa").max(30000),
   country: z.string().max(40).optional(),
+  /** Fotos del producto (de Dropi) para que la IA lea el empaque. */
+  imageUrls: z.array(photoUrl).max(4).optional(),
 });
 
 export async function aiRoutes(
@@ -82,13 +102,29 @@ export async function aiRoutes(
       throw e;
     }
 
+    const prompt = `País de venta: ${parsed.data.country ?? "Ecuador"}\n\nFICHA DEL PRODUCTO:\n${parsed.data.source}`;
+    // Solo los modelos que ven imágenes reciben las fotos.
+    const photos =
+      resolved.kind && VISION_KINDS.includes(resolved.kind) ? (parsed.data.imageUrls ?? []) : [];
     const started = Date.now();
     try {
       const result = await generateText({
         model: resolved.model,
         temperature: resolved.temperature,
         instructions: INSTRUCTIONS,
-        prompt: `País de venta: ${parsed.data.country ?? "Ecuador"}\n\nFICHA DEL PRODUCTO:\n${parsed.data.source}`,
+        ...(photos.length
+          ? {
+              messages: [
+                {
+                  role: "user" as const,
+                  content: [
+                    { type: "text" as const, text: `${prompt}\n\nFOTOS DEL PRODUCTO: adjuntas.` },
+                    ...photos.map((u) => ({ type: "image" as const, image: new URL(u) })),
+                  ],
+                },
+              ],
+            }
+          : { prompt }),
         output: Output.object({ schema: draftSchema }),
         maxRetries: 1,
         abortSignal: AbortSignal.timeout(90_000),
@@ -102,6 +138,7 @@ export async function aiRoutes(
             inputTokens: result.usage.inputTokens ?? null,
             outputTokens: result.usage.outputTokens ?? null,
             ms: Date.now() - started,
+            photos: photos.length,
           },
         }),
       );
@@ -112,6 +149,76 @@ export async function aiRoutes(
       req.log.warn(
         { errName: (e as Error).name, status, model: resolved.label },
         "fallo generando producto con IA",
+      );
+      return reply.code(502).send({
+        error: status === 401 || status === 403 ? "ia_api_key_invalida" : "ia_fallo",
+        model: resolved.label,
+      });
+    }
+  });
+
+  /**
+   * Detalle del producto a partir de sus fotos (Dropi no entrega la descripción del proveedor):
+   * qué es, presentación y lo que se lee en el empaque. Solo con modelos que ven imágenes.
+   */
+  const describeBody = z.object({
+    name: z.string().trim().min(2).max(200),
+    categories: z.array(z.string().max(80)).max(10).default([]),
+    imageUrls: z.array(photoUrl).min(1, "El producto no tiene fotos").max(4),
+  });
+  app.post("/api/ai/describe-product", { preHandler: editors }, async (req, reply) => {
+    const parsed = describeBody.safeParse(req.body);
+    if (!parsed.success)
+      return reply.code(400).send({
+        error: "datos_invalidos",
+        detail: parsed.error.issues[0]?.message,
+      });
+    let resolved: Awaited<ReturnType<ModelResolver>>;
+    try {
+      resolved = await resolveModel(req.ctx.tenantId, "utilidad");
+    } catch (e) {
+      if (e instanceof AiNotConfiguredError)
+        return reply.code(409).send({ error: "ia_no_configurada", agent: e.agent });
+      throw e;
+    }
+    if (!resolved.kind || !VISION_KINDS.includes(resolved.kind))
+      return reply.code(409).send({
+        error: "ia_sin_vision",
+        message:
+          "El modelo de «Tareas rápidas» no puede leer fotos. Usa Claude, OpenAI, Grok o Gemini en Integraciones → Modelos de IA.",
+      });
+    const { name, categories, imageUrls } = parsed.data;
+    try {
+      const result = await generateText({
+        model: resolved.model,
+        temperature: 0.2,
+        instructions: `Describes productos para una tienda que vende por WhatsApp en Latinoamérica, a partir de sus fotos.
+Escribe en español, en texto plano (sin markdown), con estas partes si se pueden ver:
+- Qué es y para qué sirve, en 2-3 frases.
+- Presentación y contenido (unidades, ml, gramos, cápsulas).
+- Lo que se lee en el empaque o la etiqueta: ingredientes, beneficios, modo de uso, advertencias.
+Usa SOLO lo que se ve en las fotos o dice el nombre. No inventes beneficios, cifras ni promesas médicas. Si algo no se lee, no lo menciones.`,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Producto: ${name}${categories.length ? `\nCategorías: ${categories.join(", ")}` : ""}`,
+              },
+              ...imageUrls.map((u) => ({ type: "image" as const, image: new URL(u) })),
+            ],
+          },
+        ],
+        maxRetries: 1,
+        abortSignal: AbortSignal.timeout(60_000),
+      });
+      return { description: result.text.trim().slice(0, 3500) };
+    } catch (e) {
+      const status = APICallError.isInstance(e) ? e.statusCode : undefined;
+      req.log.warn(
+        { errName: (e as Error).name, status, model: resolved.label },
+        "fallo describiendo producto con IA",
       );
       return reply.code(502).send({
         error: status === 401 || status === 403 ? "ia_api_key_invalida" : "ia_fallo",

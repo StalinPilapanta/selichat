@@ -214,7 +214,10 @@ function scalar(raw: string): unknown {
 const indentOf = (l: string) => l.length - l.trimStart().length;
 const HEADER = /^("[^"]*"|[^:[{]+?)(?:\[(\d+)\](?:\{([^}]*)\})?)?:(?:\s(.*))?$/;
 
-/** Lee la salida TOON de las herramientas (objetos anidados por sangría y tablas `k[N]{a,b}:`). */
+/**
+ * Lee la salida TOON de las herramientas: objetos anidados por sangría, tablas `k[N]{a,b}:` y
+ * listas de objetos (`k[N]:` con `- campo: valor`, como devuelve list_products).
+ */
 export function parseToon(text: string): Json {
   const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
   let i = 0;
@@ -243,8 +246,19 @@ export function parseToon(text: string): Json {
         else {
           const list: unknown[] = [];
           while (i < lines.length && indentOf(lines[i] as string) > ind) {
-            list.push(scalar((lines[i] as string).trim().replace(/^-\s*/, "")));
-            i++;
+            const raw = lines[i] as string;
+            const t = raw.trim();
+            const first = t.startsWith("- ") ? t.slice(2).trimStart() : "";
+            if (first && HEADER.test(first)) {
+              // Lista de objetos («- id: 1» y los demás campos debajo, con la misma sangría):
+              // se lee el objeto como un bloque desde la sangría de su primer campo.
+              const pad = indentOf(raw) + 2;
+              lines[i] = " ".repeat(pad) + first;
+              list.push(block(pad));
+            } else {
+              list.push(scalar(t.replace(/^-\s*/, "")));
+              i++;
+            }
           }
           obj[key] = list;
         }

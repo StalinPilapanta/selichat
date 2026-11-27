@@ -8,7 +8,13 @@ import { emptyProduct, ProductEditor, type ProductForm } from "@/components/cata
 import type { PromptDraft } from "@/components/PromptEditor";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
-import { type DropiCatalogProduct, dropiSourceText, formFromDropi } from "@/lib/dropi-catalog";
+import {
+  type DropiCatalogProduct,
+  describedText,
+  describeFromPhotos,
+  dropiSourceText,
+  formFromDropi,
+} from "@/lib/dropi-catalog";
 
 type Draft = {
   name: string;
@@ -35,13 +41,32 @@ function NewProduct() {
   const [dropi, setDropi] = useState<DropiCatalogProduct | null>(null);
   const [showDropi, setShowDropi] = useState(false);
 
-  function pickDropi(p: DropiCatalogProduct) {
+  /** Lectura de las fotos con la IA: «leyendo» mientras tanto, o el aviso si no se pudo. */
+  const [photoNote, setPhotoNote] = useState("");
+
+  async function pickDropi(p: DropiCatalogProduct) {
     setDropi(p);
     setShowDropi(false);
-    setForm((f) => formFromDropi(p, f ?? emptyProduct(currency ?? "USD")));
+    setForm((f) =>
+      formFromDropi(p, { ...(f ?? emptyProduct(currency ?? "USD")), description: "" }),
+    );
     setKey((k) => k + 1);
     // Con IA: la ficha arranca con lo que trae Dropi; se puede completar antes de generar.
-    if (wantsAi) setSource((s) => (s.trim() ? s : dropiSourceText(p)));
+    if (wantsAi)
+      setSource((s) => (s.trim() ? `${dropiSourceText(p)}\n\n${s}` : dropiSourceText(p)));
+    // Dropi no da la descripción: la IA la lee de las fotos (empaque, etiqueta).
+    if (!p.images.length) return;
+    setPhotoNote("Leyendo las fotos del producto para traer su detalle…");
+    const r = await describeFromPhotos(p);
+    if (!r.text) {
+      setPhotoNote(`No se pudo leer el detalle de las fotos: ${r.error ?? "sin respuesta"}`);
+      return;
+    }
+    setPhotoNote("");
+    const detail = r.text;
+    setForm((f) => (f ? { ...f, description: describedText(p, detail) } : f));
+    setKey((k) => k + 1);
+    if (wantsAi) setSource((s) => `${s.trim()}\n\nDetalle leído de las fotos:\n${detail}`);
   }
 
   useEffect(() => {
@@ -57,7 +82,11 @@ function NewProduct() {
     setBusy(true);
     setError("");
     try {
-      const d = await api<Draft>("/api/ai/generate-product", { method: "POST", body: { source } });
+      const d = await api<Draft>("/api/ai/generate-product", {
+        method: "POST",
+        // Con un producto de Dropi, la IA también mira sus fotos (empaque, etiqueta).
+        body: { source, ...(dropi?.images.length ? { imageUrls: dropi.images.slice(0, 4) } : {}) },
+      });
       // Si se eligió de Dropi, se conservan su ID, foto y variantes.
       const base = dropi
         ? formFromDropi(dropi, emptyProduct(currency ?? "USD"))
@@ -113,6 +142,13 @@ function NewProduct() {
           )}
         </div>
         {showDropi && <DropiPicker onPick={pickDropi} actionLabel="Usar sus datos" />}
+        {photoNote && (
+          <p
+            className={`text-sm ${photoNote.startsWith("Leyendo") ? "text-zinc-500" : "text-amber-700 dark:text-amber-400"}`}
+          >
+            {photoNote}
+          </p>
+        )}
       </div>
       {wantsAi && (
         <div className="card mb-6 space-y-3">
@@ -126,8 +162,18 @@ function NewProduct() {
             </Link>
             ).
           </p>
+          {dropi && (
+            <p className="text-sm text-brand-700 dark:text-brand-400">
+              Ya cargamos lo que trae Dropi
+              {dropi.images.length
+                ? ` y la IA mirará sus ${Math.min(dropi.images.length, 4)} fotos para leer el empaque`
+                : ""}
+              . Agrega debajo beneficios, modo de uso u ofertas si los tienes.
+            </p>
+          )}
           <textarea
             className="input"
+            placeholder="Descripción, beneficios, ingredientes, modo de uso, precios y ofertas…"
             rows={8}
             value={source}
             onChange={(e) => setSource(e.target.value)}

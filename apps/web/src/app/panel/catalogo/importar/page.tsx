@@ -7,7 +7,12 @@ import { DropiPicker } from "@/components/catalog/DropiPicker";
 import { emptyProduct, type ProductForm } from "@/components/catalog/ProductEditor";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
-import { type DropiCatalogProduct, formFromDropi } from "@/lib/dropi-catalog";
+import {
+  type DropiCatalogProduct,
+  describedText,
+  describeFromPhotos,
+  formFromDropi,
+} from "@/lib/dropi-catalog";
 
 type PreviewProduct = {
   slot: string;
@@ -233,6 +238,9 @@ function DropiImport() {
     setError("");
     try {
       const form: ProductForm = formFromDropi(p, emptyProduct(currency));
+      // Dropi no da la descripción: se lee de las fotos (si la IA puede); si no, la básica.
+      const photos = await describeFromPhotos(p);
+      if (photos.text) form.description = describedText(p, photos.text);
       const r = await api<{ id: string }>("/api/products", {
         method: "POST",
         body: {
@@ -253,8 +261,9 @@ function DropiImport() {
     <div className="space-y-4">
       <p className="text-sm text-zinc-500">
         Busca por ID o por nombre y toca «Importar». Se crea el producto con su nombre, precio
-        sugerido, foto, ID de Dropi y variantes; luego completa el mensaje inicial, las ofertas y
-        los disparadores para que la IA lo venda.
+        sugerido, fotos, ID de Dropi, variantes y una descripción que la IA lee de sus fotos (Dropi
+        no entrega la del proveedor). Luego completa el mensaje inicial, las ofertas y los
+        disparadores para que la IA lo venda.
       </p>
       <div className="card">
         <DropiPicker onPick={importOne} actionLabel="Importar" busyId={importing} />

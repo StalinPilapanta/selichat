@@ -6,11 +6,11 @@ import {
   ORDER_STAGES,
   type OrderStage,
 } from "@chatea/shared";
-import { KanbanSquare, List, Package, Plus, X } from "lucide-react";
+import { KanbanSquare, List, Package, Plus, Upload, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { OrderFormPanel } from "@/components/orders/OrderForm";
+import { OrderFormPanel, orderFormInitial } from "@/components/orders/OrderForm";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
 
@@ -160,16 +160,20 @@ function OrderPanel({
   onChange: () => void;
 }) {
   const [o, setO] = useState<Detail | null>(null);
-  const [form, setForm] = useState<Customer | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  /**
+   * Formulario para corregir y subir. Un pedido que aún no está en Dropi se abre directo en el
+   * formulario; al cerrarlo queda el detalle (historial, aprobar o cancelar).
+   */
+  const [editing, setEditing] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     try {
       const d = await api<Detail>(`/api/orders/${id}`);
       setO(d);
-      setForm(d.customer);
+      setEditing((e) => (e === null ? LOCAL_STAGES.includes(d.stage) && !d.dropiOrderId : e));
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -178,8 +182,7 @@ function OrderPanel({
     load();
   }, [load]);
 
-  const local = o ? LOCAL_STAGES.includes(o.stage) : false;
-  const dirty = o && form ? JSON.stringify(o.customer) !== JSON.stringify(form) : false;
+  const local = o ? LOCAL_STAGES.includes(o.stage) && !o.dropiOrderId : false;
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -196,11 +199,8 @@ function OrderPanel({
     }
   }
 
-  const saveData = () =>
-    run("guardar", () => api(`/api/orders/${id}`, { method: "PATCH", body: { customer: form } }));
   const upload = (force = false) =>
     run("subir", async () => {
-      if (dirty) await api(`/api/orders/${id}`, { method: "PATCH", body: { customer: form } });
       const r = await api<{ result: { status: string } }>(`/api/orders/${id}/upload`, {
         method: "POST",
         body: { force },
@@ -240,7 +240,7 @@ function OrderPanel({
             ✕
           </button>
         </div>
-        {!o || !form ? (
+        {!o ? (
           <ErrorText>{error}</ErrorText>
         ) : (
           <>
@@ -298,24 +298,18 @@ function OrderPanel({
                   {agencyLabel(o.customer.agencia)}
                 </p>
               )}
-              {FIELDS.map((f) => (
-                <label key={f.key} className="block text-sm">
-                  <span className="label">
-                    {f.label}
-                    {f.key === "telefono" && form.telefono && (
-                      <span className="ml-1 font-normal text-zinc-500">
-                        ({displayPhone(form.telefono, o.contactPhone)})
-                      </span>
-                    )}
-                  </span>
-                  <input
-                    className="input"
-                    disabled={!local}
-                    value={form[f.key] ?? ""}
-                    onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                  />
-                </label>
-              ))}
+              <dl className="space-y-1 text-sm">
+                {FIELDS.filter((f) => o.customer[f.key]?.trim()).map((f) => (
+                  <div key={f.key} className="flex gap-2">
+                    <dt className="w-24 shrink-0 text-zinc-500">{f.label}</dt>
+                    <dd className="min-w-0 break-words">
+                      {f.key === "telefono"
+                        ? displayPhone(o.customer.telefono ?? "", o.contactPhone)
+                        : o.customer[f.key]}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
               {!local && (
                 <p className="text-xs text-zinc-500">
                   Ya está en Dropi: los cambios de dirección o cancelación se hacen en Dropi.
@@ -327,27 +321,23 @@ function OrderPanel({
             {note && <p className="text-sm text-brand-700 dark:text-brand-400">{note}</p>}
             {local && (
               <div className="flex flex-wrap gap-2">
-                {o.stage === "revision" ? (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!!busy}
+                  onClick={() => setEditing(true)}
+                >
+                  <Upload className="size-4" />
+                  Revisar y subir a Dropi
+                </button>
+                {o.stage === "revision" && (
                   <button
                     type="button"
-                    className="btn"
+                    className="btn-secondary"
                     disabled={!!busy}
                     onClick={() => upload(true)}
                   >
                     {busy === "subir" ? "Subiendo…" : "Aprobar y subir"}
-                  </button>
-                ) : (
-                  <button type="button" className="btn" disabled={!!busy} onClick={() => upload()}>
-                    {busy === "subir"
-                      ? "Subiendo…"
-                      : o.stage === "error_subida"
-                        ? "Reintentar subida"
-                        : "Subir a Dropi"}
-                  </button>
-                )}
-                {dirty && (
-                  <button type="button" className="btn-ghost" disabled={!!busy} onClick={saveData}>
-                    Guardar datos
                   </button>
                 )}
                 <button
@@ -369,6 +359,34 @@ function OrderPanel({
               </Link>
             )}
 
+            {editing && local && (
+              <OrderFormPanel
+                initial={orderFormInitial(o)}
+                orderId={o.id}
+                uploadByDefault
+                title="Revisar y subir a Dropi"
+                subtitle={
+                  o.uploadError
+                    ? `No se subió: ${o.uploadError}`
+                    : "Revisa los datos antes de subirlos; puedes corregir lo que haga falta."
+                }
+                onClose={() => setEditing(false)}
+                onCreated={async (_id, result) => {
+                  setEditing(false);
+                  setNote(
+                    !result
+                      ? "Datos guardados. Queda por subir a Dropi."
+                      : result.status === "subido"
+                        ? "Subido a Dropi ✓"
+                        : result.status === "revision"
+                          ? "No se subió: quedó en «Revisar» para un dueño o administrador."
+                          : "Datos guardados, pero no se pudo subir: revisa el motivo.",
+                  );
+                  await load();
+                  onChange();
+                }}
+              />
+            )}
             <div>
               <h3 className="mb-2 text-sm font-medium">Historial</h3>
               <ol className="space-y-2 border-l border-zinc-200 pl-3 text-xs dark:border-zinc-800">

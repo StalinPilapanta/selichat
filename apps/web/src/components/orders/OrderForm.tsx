@@ -196,6 +196,46 @@ export type OrderFormInitial = {
   notes?: string;
 };
 
+/** Lo que hace falta de un pedido guardado para abrirlo en el formulario. */
+export type SavedOrder = {
+  customer: Record<string, string | undefined>;
+  items: { productId?: string; quantity: number; variant?: string }[];
+  total: string;
+  rateType: string | null;
+  notes: string | null;
+};
+
+/** Un pedido guardado, como datos iniciales para corregirlo antes de subirlo. */
+export function orderFormInitial(o: SavedOrder): OrderFormInitial {
+  const c = o.customer;
+  return {
+    customer: {
+      nombre: c.nombre ?? "",
+      apellido: c.apellido ?? "",
+      telefono: c.telefono ?? "",
+      provincia: c.provincia ?? "",
+      ciudad: c.ciudad ?? "",
+      direccion: c.direccion ?? "",
+      referencia: c.referencia ?? "",
+      ...(c.agencia ? { agencia: c.agencia } : {}),
+    },
+    lines: o.items
+      .filter((i) => i.productId)
+      .map((i) => ({
+        productId: i.productId as string,
+        quantity: i.quantity,
+        variant: i.variant ?? "",
+      })),
+    total: Number(o.total).toFixed(2),
+    rateType: o.rateType ?? "CON RECAUDO",
+    // La nota de retiro en agencia se vuelve a armar al guardar.
+    notes: (o.notes ?? "")
+      .split(" · ")
+      .filter((n) => !n.startsWith("RETIRO EN AGENCIA:"))
+      .join(" · "),
+  };
+}
+
 /** NOMBRE---SECTOR---DIRECCIÓN guardado → agencia elegida (para volver a mostrarla). */
 function agencyFromRegistro(registro: string): AgencyOpt {
   const [nombre = "", sector = "", direccion = ""] = registro.split("---");

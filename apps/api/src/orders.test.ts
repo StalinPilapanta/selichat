@@ -1567,6 +1567,33 @@ describe("recordatorio de retiro en agencia", () => {
 });
 
 describe("importar productos de Dropi", () => {
+  it("lee la lista de productos en TOON tal como la devuelve list_products", () => {
+    const d = parseToon(`items[1]:
+  - id: 197094
+    sku: "45774"
+    name: X2 Drenaje Linfatico Mayaberra
+    sale_price: 5.99
+    suggested_price: 7
+    stock: 977
+    categories[1]: Belleza
+    gallery[1]{urlS3}:
+      "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/197094/foto.jpeg"
+    variations[0]:
+count: 1
+currency: USD`);
+    const [p] = (d.items as Record<string, unknown>[]).map(catalogProductFrom);
+    expect(p).toMatchObject({
+      id: "197094",
+      name: "X2 Drenaje Linfatico Mayaberra",
+      cost: 5.99,
+      suggestedPrice: 7,
+      stock: 977,
+      categories: ["Belleza"],
+      imageUrl: "https://d39ru7awumhhs2.cloudfront.net/ecuador/products/197094/foto.jpeg",
+      variations: [],
+    });
+  });
+
   it("toma nombre, precios, foto, stock y variantes del catálogo", () => {
     const p = catalogProductFrom({
       id: 140635,

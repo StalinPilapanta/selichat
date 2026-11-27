@@ -34,6 +34,8 @@ const draft = {
 
 const mockModel = (text: string) =>
   new MockLanguageModelV4({
+    // «Acepta» URLs de imágenes: el SDK no las descarga en las pruebas.
+    supportedUrls: { "image/*": [/^https:\/\//] },
     doGenerate: {
       content: [{ type: "text", text }],
       finishReason: { unified: "stop", raw: "stop" },
@@ -50,6 +52,8 @@ describe.skipIf(!hasDb)("Generador de producto con IA", () => {
   let h: ReturnType<typeof client>;
   let reply = JSON.stringify(draft);
   let seenPrompt = "";
+  /** Proveedor del modelo de prueba: con uno que ve imágenes se le envían las fotos. */
+  let kind: "anthropic" | undefined;
 
   beforeAll(async () => {
     app = await testApp(
@@ -63,7 +67,7 @@ describe.skipIf(!hasDb)("Generador de producto con IA", () => {
             seenPrompt = JSON.stringify(o.prompt);
             return orig(o);
           };
-          return { model: m, temperature: 0.3, label: "mock/test" };
+          return { model: m, temperature: 0.3, label: "mock/test", ...(kind ? { kind } : {}) };
         },
       },
     );
@@ -93,6 +97,51 @@ describe.skipIf(!hasDb)("Generador de producto con IA", () => {
       (await h.call(o.cookie, "POST", "/api/ai/generate-product", { source: "corto" })).statusCode,
     ).toBe(400);
     reply = JSON.stringify(draft);
+  });
+
+  it("detalle del producto leído de sus fotos (Dropi no da la descripción)", async () => {
+    const o = await h.owner("describe");
+    const body = {
+      name: "X2 Drenaje Linfatico Mayaberra",
+      categories: ["Belleza"],
+      imageUrls: ["https://d39ru7awumhhs2.cloudfront.net/ecuador/products/197094/foto.jpeg"],
+    };
+    // Un modelo que no ve imágenes no puede.
+    kind = undefined;
+    const noVision = await h.call(o.cookie, "POST", "/api/ai/describe-product", body);
+    expect(noVision.statusCode).toBe(409);
+    expect(noVision.json().error).toBe("ia_sin_vision");
+    // Con uno que sí: recibe la foto y devuelve el detalle.
+    kind = "anthropic";
+    reply =
+      "Crema reductora de 250 ml con cafeína y centella asiática. Modo de uso: aplicar con masaje.";
+    const ok = await h.call(o.cookie, "POST", "/api/ai/describe-product", body);
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.json().description).toContain("250 ml");
+    expect(seenPrompt).toContain("cloudfront.net");
+    // Fotos fuera de Dropi: no.
+    const bad = await h.call(o.cookie, "POST", "/api/ai/describe-product", {
+      ...body,
+      imageUrls: ["https://ejemplo.com/a.jpg"],
+    });
+    expect(bad.statusCode).toBe(400);
+    kind = undefined;
+    reply = JSON.stringify(draft);
+  });
+
+  it("fotos del producto: solo del CDN de Dropi", async () => {
+    const o = await h.owner("gen3");
+    const source = "Producto: X2 Drenaje Linfatico Mayaberra\nCategorías: Belleza";
+    const ok = await h.call(o.cookie, "POST", "/api/ai/generate-product", {
+      source,
+      imageUrls: ["https://d39ru7awumhhs2.cloudfront.net/ecuador/products/197094/foto.jpeg"],
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+    const bad = await h.call(o.cookie, "POST", "/api/ai/generate-product", {
+      source,
+      imageUrls: ["http://169.254.169.254/latest/meta-data"],
+    });
+    expect(bad.statusCode).toBe(400);
   });
 });
 
