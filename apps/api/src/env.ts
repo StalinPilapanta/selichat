@@ -10,6 +10,11 @@ const schema = z.object({
   WEB_URL: z.url().default("http://localhost:3100"),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  /**
+   * Pedir que la persona confirme su correo antes de entrar (cuentas con contraseña).
+   * Por defecto sí; en pruebas no (las pruebas crean cuentas sin bandeja de correo).
+   */
+  REQUIRE_EMAIL_VERIFICATION: z.enum(["true", "false"]).optional(),
   SMTP_URL: z.string().optional(),
   EMAIL_FROM: z.string().default("Chatea <no-reply@example.com>"),
   LOG_LEVEL: z.string().default("info"),

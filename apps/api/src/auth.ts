@@ -14,6 +14,8 @@ export function createAuth(deps: { env: Env; db: Database; mail: Mailer }) {
       ? { google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET } }
       : undefined;
 
+  const requireVerification =
+    (env.REQUIRE_EMAIL_VERIFICATION ?? (env.NODE_ENV === "test" ? "false" : "true")) === "true";
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.WEB_URL,
@@ -31,9 +33,29 @@ export function createAuth(deps: { env: Env; db: Database; mail: Mailer }) {
         invitation: schema.invitation,
       },
     }),
+    user: {
+      additionalFields: {
+        /** WhatsApp del dueño: para escribirle si algo se traba con su tienda. */
+        phone: { type: "string", required: false, input: true },
+      },
+    },
+    emailVerification: {
+      sendOnSignUp: true,
+      // Al tocar el enlace del correo queda dentro, sin volver a escribir la contraseña.
+      autoSignInAfterVerification: true,
+      expiresIn: 60 * 60 * 24,
+      sendVerificationEmail: async ({ user, url }) => {
+        await mail({
+          to: user.email,
+          subject: "Confirma tu correo para entrar a Selichat",
+          text: `Hola ${user.name},\n\nConfirma tu correo para empezar a usar Selichat (el enlace vence en 24 horas):\n${url}\n\nSi no creaste una cuenta, ignora este correo.`,
+        });
+      },
+    },
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
+      requireEmailVerification: requireVerification,
       // Al cambiar la clave se cierran las demás sesiones abiertas.
       revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user, url }) => {

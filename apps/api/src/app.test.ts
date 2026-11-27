@@ -174,3 +174,50 @@ describe.skipIf(!hasDb)("API (integración)", () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe.skipIf(!hasDb)("Registro con confirmación de correo", () => {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    app = await testApp({ REQUIRE_EMAIL_VERIFICATION: "true" });
+  });
+  afterAll(async () => app.close());
+
+  it("guarda el WhatsApp y no deja entrar hasta confirmar el correo", async () => {
+    const email = `registro-${Date.now()}@test.local`;
+    const headers = { origin: "http://localhost:3100" };
+    const up = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-up/email",
+      headers,
+      payload: {
+        email,
+        password: "clave-segura-123",
+        name: "Ana",
+        phone: "593991234567",
+        callbackURL: "/crear-tienda",
+      },
+    });
+    expect(up.statusCode, up.body).toBe(200);
+    // Sin sesión hasta confirmar el correo.
+    expect(up.json().token).toBeNull();
+    expect(up.json().user.phone).toBe("593991234567");
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      headers,
+      payload: { email, password: "clave-segura-123" },
+    });
+    expect(login.statusCode).toBe(403);
+    expect(login.json().code).toBe("EMAIL_NOT_VERIFIED");
+
+    // Puede pedir que se lo reenvíen.
+    const resend = await app.inject({
+      method: "POST",
+      url: "/api/auth/send-verification-email",
+      headers,
+      payload: { email, callbackURL: "/crear-tienda" },
+    });
+    expect(resend.statusCode, resend.body).toBe(200);
+  });
+});

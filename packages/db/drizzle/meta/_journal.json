@@ -155,6 +155,13 @@
       "when": 1795733117186,
       "tag": "0021_channel_two_step_pin",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1795790503505,
+      "tag": "0022_user_phone",
+      "breakpoints": true
     }
   ]
 }

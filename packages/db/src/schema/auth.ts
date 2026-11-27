@@ -18,6 +18,8 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  /** WhatsApp del dueño de la cuenta (dígitos con prefijo, p. ej. 593991234567). */
+  phone: text("phone"),
   ...timestamps,
 });
 

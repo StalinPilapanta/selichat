@@ -2,6 +2,7 @@
 /** Mi perfil: nombre que ve el equipo y cambio de contraseña. */
 import { UserCircle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { PhoneField } from "@/components/PhoneField";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { authClient, useSession } from "@/lib/auth-client";
 
@@ -17,6 +18,7 @@ function Feedback({ msg }: { msg: Msg }) {
 export default function ProfilePage() {
   const { data: session, refetch } = useSession();
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [nameMsg, setNameMsg] = useState<Msg>(null);
   const [savingName, setSavingName] = useState(false);
 
@@ -38,7 +40,8 @@ export default function ProfilePage() {
     const clean = name.trim();
     if (!clean) return setNameMsg({ ok: false, text: "Escribe tu nombre." });
     setSavingName(true);
-    const { error } = await authClient.updateUser({ name: clean });
+    if (!phone) return setNameMsg({ ok: false, text: "Escribe tu WhatsApp completo." });
+    const { error } = await authClient.updateUser({ name: clean, phone });
     setSavingName(false);
     if (error) return setNameMsg({ ok: false, text: error.message ?? "No se pudo guardar." });
     setNameMsg({ ok: true, text: "Nombre guardado." });
@@ -103,6 +106,17 @@ export default function ProfilePage() {
             Lo ve tu equipo en las conversaciones asignadas y en las notas.
           </span>
         </label>
+        <div>
+          <span className="label">WhatsApp</span>
+          <PhoneField
+            key={session.user.phone ?? "sin"}
+            value={session.user.phone ?? ""}
+            onChange={(v) => {
+              setPhone(v);
+              setNameMsg(null);
+            }}
+          />
+        </div>
         <label className="block">
           <span className="label">Correo</span>
           <input className="input" value={session.user.email} disabled />

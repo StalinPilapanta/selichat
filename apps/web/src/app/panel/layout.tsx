@@ -35,8 +35,13 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (isPending) return;
     if (!session) return router.replace(`/entrar?next=${encodeURIComponent(pathname)}`);
+    // Sin WhatsApp del dueño (entró con Google o cuenta anterior): se pide una vez.
+    if (!session.user.phone)
+      return router.replace(`/confirmar-whatsapp?next=${encodeURIComponent(pathname)}`);
     if (orgsPending || !orgs) return;
-    if (orgs.length === 0) return router.replace("/crear-tienda");
+    // Sin tiendas: a crear una. Si la sesión ya tiene tienda activa, la lista está desactualizada.
+    if (orgs.length === 0 && !session.session.activeOrganizationId)
+      return router.replace("/crear-tienda");
     const first = orgs[0];
     if (!session.session.activeOrganizationId && first) {
       authClient.organization.setActive({ organizationId: first.id });
