@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ayuda · Cómo trabaja Selichat</title>
+<meta name="robots" content="noindex">
+<style>
+  :root{
+    --bg:#030712; --panel:#0e1216; --panel2:#111827; --line:#1f2937;
+    --text:#f3f4f6; --muted:#99a1af; --dim:#6a7282;
+    --lime:#8fc531; --lime2:#a5d363; --btn:#568100; --limebg:rgba(143,197,49,.12);
+    --red:#ff6467; --redbg:rgba(255,100,103,.12);
+    --amber:#fbbf24; --amberbg:rgba(251,191,36,.12);
+    --blue:#8ec5ff; --bluebg:rgba(142,197,255,.12);
+    --mint:#5ee9b5; --mintbg:rgba(94,233,181,.12);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#000;color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  .viewport{position:fixed;inset:0;overflow:hidden}
+  .deck{width:1280px;height:720px;position:absolute;left:50%;top:calc(50% - 26px);transform-origin:center}
+  .slide{position:absolute;inset:0;background:var(--bg);border:1px solid var(--line);border-radius:18px;
+    padding:56px 64px;display:none;flex-direction:column;overflow:hidden}
+  .slide.on{display:flex}
+  .slide::after{content:"";position:absolute;right:-180px;top:-180px;width:460px;height:460px;border-radius:50%;
+    background:radial-gradient(circle,rgba(143,197,49,.10),transparent 65%);pointer-events:none}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--lime);
+    letter-spacing:.04em;text-transform:uppercase;margin-bottom:14px}
+  .kicker .n{display:grid;place-items:center;width:26px;height:26px;border-radius:8px;background:var(--limebg);
+    border:1px solid rgba(143,197,49,.35);font-size:13px}
+  h1{font-size:60px;line-height:1.05;font-weight:800;letter-spacing:-.02em}
+  h2{font-size:38px;line-height:1.15;font-weight:750;letter-spacing:-.01em;margin-bottom:10px}
+  .lead{font-size:20px;color:var(--muted);line-height:1.5;max-width:900px}
+  .lime{color:var(--lime)}
+  .grow{flex:1;min-height:0}
+  .foot{position:absolute;left:64px;right:64px;bottom:22px;display:flex;justify-content:space-between;
+    font-size:13px;color:var(--dim)}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--text)}
+  .brand i{width:18px;height:18px;border-radius:6px;background:var(--lime);display:inline-block}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+  .card h3{font-size:18px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+  .card p{font-size:15px;color:var(--muted);line-height:1.5}
+  .ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none;
+    background:var(--limebg);color:var(--lime);font-size:17px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);color:var(--muted)}
+  .p-lime{background:var(--limebg);color:var(--lime2);border-color:rgba(143,197,49,.35)}
+  .p-red{background:var(--redbg);color:var(--red);border-color:rgba(255,100,103,.35)}
+  .p-amber{background:var(--amberbg);color:var(--amber);border-color:rgba(251,191,36,.35)}
+  .p-blue{background:var(--bluebg);color:var(--blue);border-color:rgba(142,197,255,.35)}
+  .p-mint{background:var(--mintbg);color:var(--mint);border-color:rgba(94,233,181,.35)}
+
+  .flow{display:flex;align-items:center;gap:0;margin-top:20px}
+  .step{flex:1;position:relative;padding:0 6px}
+  .step .box{min-height:250px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 14px;text-align:center}
+  .step .num{width:34px;height:34px;margin:0 auto 10px;border-radius:50%;display:grid;place-items:center;font-weight:800;
+    background:var(--lime);color:#0b1200}
+  .step b{display:block;font-size:16px;margin-bottom:6px}
+  .step span{font-size:13px;color:var(--muted);line-height:1.4;display:block}
+  .step .who{margin-top:10px}
+  .step:not(:last-child)::after{content:"";position:absolute;right:-7px;top:37px;width:14px;height:2px;background:var(--lime);z-index:2}
+
+  .checks{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;margin-top:22px}
+  .check{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+  .check .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--panel2);
+    border:1px solid var(--line);font-weight:700;font-size:13px;color:var(--lime);flex:none}
+  .check .t{flex:1;font-size:15px}
+  .check .t small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+
+  .rail{display:flex;gap:8px;margin-top:26px}
+  .stage{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 12px;position:relative}
+  .stage b{font-size:15px;display:block;margin-bottom:4px}
+  .stage span{font-size:12.5px;color:var(--muted);line-height:1.35;display:block}
+  .stage.hl{border-color:rgba(143,197,49,.55);background:linear-gradient(180deg,rgba(143,197,49,.10),var(--panel))}
+  .stage .bar{height:4px;border-radius:4px;margin-bottom:10px;background:var(--lime)}
+
+  .chat{display:flex;flex-direction:column;gap:10px}
+  .msg{max-width:78%;font-size:15px;line-height:1.45;padding:10px 14px;border-radius:14px}
+  .msg.in{background:var(--panel2);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+  .msg.out{background:rgba(86,129,0,.35);border:1px solid rgba(143,197,49,.35);align-self:flex-end;border-bottom-right-radius:4px}
+  .tool{align-self:center;font-size:12px;color:var(--lime2);font-family:ui-monospace,Menlo,monospace;
+    background:var(--limebg);border:1px dashed rgba(143,197,49,.4);padding:4px 10px;border-radius:8px}
+
+  .nav{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;
+    background:rgba(14,18,22,.9);border:1px solid var(--line);border-radius:999px;padding:6px 8px;z-index:10}
+  .nav button{background:transparent;border:0;color:var(--text);width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:16px}
+  .nav button:hover{background:var(--panel2)}
+  .nav .count{font-size:13px;color:var(--muted);min-width:56px;text-align:center;font-variant-numeric:tabular-nums}
+  .progress{position:fixed;left:0;top:0;height:3px;background:var(--lime);z-index:10;transition:width .25s}
+  @media print{
+    .nav,.progress{display:none}
+    .viewport{position:static;display:block}
+    .deck{transform:none!important;width:auto;height:auto}
+    .slide{display:flex!important;position:relative;width:1280px;height:720px;page-break-after:always;border-radius:0}
+  }
+
+  .split{display:grid;grid-template-columns:1fr 1.2fr;gap:24px;margin-top:20px;align-items:start}
+  .stack{display:flex;flex-direction:column;gap:10px}
+  .mini{display:flex;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .mini b{font-size:15.5px;display:block;margin-bottom:2px}
+  .mini p{font-size:13.5px;color:var(--muted);line-height:1.4}
+  .shot{margin:0}
+  .shot .frame{border:1px solid #2a3441;border-radius:12px;overflow:hidden;background:#111;
+    box-shadow:0 18px 40px rgba(0,0,0,.55),0 0 0 4px rgba(143,197,49,.06)}
+  .shot img{display:block;width:100%;height:100%;object-fit:cover}
+  .shot figcaption{font-size:12.5px;color:var(--muted);margin-top:8px;display:flex;gap:6px;align-items:center}
+  .shot figcaption::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--lime);flex:none}
+  .tl{display:flex;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .tl .dot{width:12px;height:12px;border-radius:50%;background:var(--lime);margin-top:5px;flex:none;box-shadow:0 0 0 4px rgba(255,255,255,.04)}
+  .tl b{font-size:15.5px;display:block;margin-bottom:2px}
+  .tl p{font-size:13.5px;color:var(--muted);line-height:1.4}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="viewport"><div class="deck" id="deck">
+
+<section class="slide">
+  <div class="grow" style="display:flex;flex-direction:column;justify-content:center">
+    <div class="kicker">Cómo trabaja Selichat</div>
+    <h1>De un mensaje de WhatsApp<br>a un pedido <span class="lime">en Dropi</span></h1>
+    <p class="lead" style="margin-top:22px">El paso a paso de lo que hace la IA de ventas: desde que un cliente escribe hasta que su pedido está en Dropi y le avisamos cada movimiento del envío.</p>
+    <div style="display:flex;gap:10px;margin-top:30px">
+      <span class="pill p-lime">WhatsApp</span><span class="pill p-blue">IA de ventas</span>
+      <span class="pill p-mint">Dropi</span><span class="pill p-amber">Servientrega</span>
+    </div>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Equipo de ventas y logística</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">El recorrido completo</div>
+  <h2>Siete pasos, casi todos automáticos</h2>
+  <p class="lead">La IA conversa y cierra la venta; Selichat revisa y sube el pedido; Dropi lo despacha y nosotros avisamos al cliente.</p>
+  <div class="flow grow">
+    <div class="step"><div class="box"><div class="num">1</div><b>Llega el mensaje</b><span>El cliente escribe desde un anuncio o directo.</span><div class="who"><span class="pill">WhatsApp</span></div></div></div>
+    <div class="step"><div class="box"><div class="num">2</div><b>Revisiones</b><span>Esperamos que termine de escribir y vemos si la IA debe responder.</span><div class="who"><span class="pill">Selichat</span></div></div></div>
+    <div class="step"><div class="box"><div class="num">3</div><b>La IA vende</b><span>Presenta el producto, resuelve dudas y pide los datos.</span><div class="who"><span class="pill p-blue">IA</span></div></div></div>
+    <div class="step"><div class="box"><div class="num">4</div><b>Confirma</b><span>Resumen, el cliente acepta y nace el pedido.</span><div class="who"><span class="pill p-blue">IA</span></div></div></div>
+    <div class="step"><div class="box"><div class="num">5</div><b>Controles</b><span>Ciudad, huella, duplicados, stock y envío.</span><div class="who"><span class="pill">Selichat</span></div></div></div>
+    <div class="step"><div class="box"><div class="num">6</div><b>Sube a Dropi</b><span>Se crea la orden y queda por confirmar.</span><div class="who"><span class="pill p-mint">Dropi</span></div></div></div>
+    <div class="step"><div class="box"><div class="num">7</div><b>Seguimiento</b><span>Estados del envío y avisos al cliente.</span><div class="who"><span class="pill p-mint">Dropi</span></div></div></div>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Vista general</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">1</span>Llega el mensaje</div>
+  <h2>WhatsApp nos avisa y guardamos todo</h2>
+  <div class="split grow">
+    <div class="stack">
+      <div class="mini"><span class="ico">🔒</span><div><b>Mensaje verificado</b><p>Cada aviso de Meta trae una firma; si no coincide se rechaza y el panel alerta.</p></div></div>
+      <div class="mini"><span class="ico">👤</span><div><b>Cliente y conversación</b><p>Se guarda el teléfono y nombre de WhatsApp; el chat aparece en la bandeja al instante.</p></div></div>
+      <div class="mini"><span class="ico">📣</span><div><b>Anuncio de origen</b><p>Si vino de un anuncio de clic a WhatsApp, sabemos de cuál.</p></div></div>
+      <div class="mini"><span class="ico">🎯</span><div><b>Producto detectado</b><p>Por el ID del anuncio o una palabra clave del primer mensaje.</p></div></div>
+    </div>
+    <figure class="shot"><div class="frame" style="height:340px"><img src="img/disparadores.png" alt="Catálogo → producto → Disparadores: palabras clave e IDs de anuncio" style="width:125.00%;max-width:none;height:auto;margin-left:-25.00%;margin-top:-5.47%"></div><figcaption>Catálogo → producto → Disparadores: palabras clave e IDs de anuncio</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Meta WhatsApp Cloud API</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">2</span>Antes de responder</div>
+  <h2>La IA espera y revisa si le toca hablar</h2>
+  <div class="grid2 grow" style="margin-top:22px;grid-template-columns:1fr 1.2fr">
+    <div class="card" style="display:flex;flex-direction:column;justify-content:center">
+      <h3><span class="ico">⏱️</span>Espera 2,5 segundos</h3>
+      <p>Si el cliente manda «hola», «quiero info» y «precio?» seguidos, la IA responde todo en un solo mensaje, como una persona.</p>
+      <p style="margin-top:10px">Nunca responde dos veces a la vez en el mismo chat.</p>
+    </div>
+    <div class="card">
+      <h3><span class="ico">✋</span>No responde cuando…</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+        <div class="check"><div class="t">Un asesor tomó el chat<small>La IA queda en pausa hasta que se la reactive.</small></div></div>
+        <div class="check"><div class="t">Pasaron más de 24 h desde el último mensaje del cliente<small>Regla de WhatsApp: después solo se puede usar una plantilla aprobada.</small></div></div>
+        <div class="check"><div class="t">Un asesor ya contestó o la conversación está cerrada</div></div>
+        <div class="check"><div class="t">Llegó a 20 respuestas en una hora<small>Pasa el chat a un asesor para evitar conversaciones sin fin.</small></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Reglas de la IA</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">3</span>La IA vende</div>
+  <h2>Una conversación con guion y con método</h2>
+  <div class="split grow" style="grid-template-columns:.9fr 1.25fr">
+    <div>
+      <p class="lead" style="font-size:16px">Primero sale el <b style="color:var(--text)">mensaje de bienvenida fijo</b> del producto. Desde ahí la IA sigue su guion en este orden:</p>
+      <div class="stack" style="margin-top:14px">
+        <div class="check"><div class="k">1</div><div class="t">Descubrimiento<small>Saluda y entiende qué necesita.</small></div></div>
+        <div class="check"><div class="k">2</div><div class="t">Oferta<small>Beneficios, ofertas y objeciones.</small></div></div>
+        <div class="check"><div class="k">3</div><div class="t">Datos<small>Nombre, ciudad, dirección o agencia.</small></div></div>
+        <div class="check"><div class="k">4</div><div class="t">Resumen y confirmación<small>«¿Confirmamos tu pedido?»</small></div></div>
+      </div>
+    </div>
+    <figure class="shot"><div class="frame" style="height:360px"><img src="img/bandeja.png" alt="Conversaciones: la IA ofrece la agencia Servientrega más cercana" style="width:125.00%;max-width:none;height:auto;margin-left:-25.00%;margin-top:-5.47%"></div><figcaption>Conversaciones: la IA ofrece la agencia Servientrega más cercana</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Flujo de venta</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">3</span>Las herramientas de la IA</div>
+  <h2>No solo conversa: también resuelve</h2>
+  <p class="lead">Mientras habla con el cliente, la IA consulta datos reales para no prometer lo que no se puede cumplir.</p>
+  <div class="grid3 grow" style="margin-top:24px;align-content:start">
+    <div class="card"><h3><span class="ico">🏙️</span>Verifica la ciudad</h3><p>Confirma en Dropi que la ciudad existe y tiene cobertura. Si hay dos con el mismo nombre, pregunta la provincia.</p></div>
+    <div class="card"><h3><span class="ico">📍</span>Busca la agencia</h3><p>Encuentra las agencias Servientrega cerca del barrio del cliente para que retire y pague allí.</p></div>
+    <div class="card"><h3><span class="ico">📝</span>Guarda los datos</h3><p>Anota cada dato apenas el cliente lo da y sabe qué falta para cerrar.</p></div>
+    <div class="card"><h3><span class="ico">🖼️</span>Envía fotos y videos</h3><p>Usa los recursos del producto cuando ayudan a vender, sin repetirlos.</p></div>
+    <div class="card"><h3><span class="ico">✅</span>Confirma el pedido</h3><p>Solo si están todos los datos y el cliente aceptó el resumen.</p></div>
+    <div class="card"><h3><span class="ico">🙋</span>Llama a un asesor</h3><p>Si el cliente lo pide, está molesto o pregunta algo fuera del guion.</p></div>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Dropi · Servientrega · WhatsApp</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">4</span>Confirma y nace el pedido</div>
+  <h2>El cliente dice «sí» y el pedido aparece en Selichat</h2>
+  <p class="lead" style="font-size:17px">Se crea el pedido en <span class="pill p-amber">Por subir</span>, el lead pasa a <span class="pill p-blue">Ganado</span> y, si la subida automática está activa, sale solo a Dropi. El cliente no espera.</p>
+  <div class="grid2 grow" style="margin-top:18px">
+    <figure class="shot"><div class="frame" style="height:330px"><img src="img/confirmado.png" alt="La IA confirma y la ficha muestra «Pedido confirmado»" style="width:125.00%;max-width:none;height:auto;margin-left:-25.00%;margin-top:-5.47%"></div><figcaption>La IA confirma y la ficha muestra «Pedido confirmado»</figcaption></figure>
+    <figure class="shot"><div class="frame" style="height:330px"><img src="img/leads.png" alt="Leads: la conversación pasa a «Ganado» con su pedido" style="width:125.00%;max-width:none;height:auto;margin-left:-25.00%;margin-top:-5.47%"></div><figcaption>Leads: la conversación pasa a «Ganado» con su pedido</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Pedidos y embudo</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">5</span>Controles antes de Dropi</div>
+  <h2>Revisamos el pedido antes de gastar un envío</h2>
+  <div class="split grow" style="grid-template-columns:1fr 1fr">
+    <div class="stack" style="gap:6px">
+      <div class="check"><div class="k">1</div><div class="t">Dropi conectado y producto con ID de Dropi</div></div>
+      <div class="check"><div class="k">2</div><div class="t">Datos completos del cliente</div></div>
+      <div class="check"><div class="k">3</div><div class="t">Ciudad y provincia válidas en Dropi</div></div>
+      <div class="check"><div class="k">4</div><div class="t">Huella del cliente <span class="pill p-amber" style="margin-left:6px">Revisar</span></div></div>
+      <div class="check"><div class="k">5</div><div class="t">Pedido duplicado en Dropi <span class="pill p-amber" style="margin-left:6px">Revisar</span></div></div>
+      <div class="check"><div class="k">6</div><div class="t">Stock y precio sobre el costo del proveedor</div></div>
+      <div class="check"><div class="k">7</div><div class="t">Cotización del envío con cobertura</div></div>
+      <div class="check" style="border-color:rgba(143,197,49,.5)"><div class="k" style="background:var(--lime);color:#0b1200">✓</div><div class="t">Se crea la orden en Dropi</div></div>
+    </div>
+    <figure class="shot"><div class="frame" style="height:370px"><img src="img/error.png" alt="Si algo falla: «Error al subir» con el motivo para corregir y reintentar" style="width:125.00%;max-width:none;height:auto;margin-left:-25.00%;margin-top:0"></div><figcaption>Si algo falla: «Error al subir» con el motivo para corregir y reintentar</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Subida a Dropi</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">6</span>En Dropi</div>
+  <h2>El pedido avanza solo por las etapas</h2>
+  <p class="lead" style="font-size:17px">Dropi nos informa cada cambio (al instante o en una consulta cada 10 minutos) y el pedido se mueve en el tablero.</p>
+  <div class="rail" style="margin-top:16px">
+    <div class="stage"><div class="bar" style="background:var(--amber)"></div><b>Por confirmar</b><span>Espera confirmación en Dropi.</span></div>
+    <div class="stage"><div class="bar"></div><b>Confirmado</b><span>Con guía generada.</span></div>
+    <div class="stage"><div class="bar" style="background:var(--blue)"></div><b>En camino</b><span>La transportadora lo lleva.</span></div>
+    <div class="stage hl"><div class="bar" style="background:var(--mint)"></div><b>En agencia</b><span>Espera que lo retire.</span></div>
+    <div class="stage"><div class="bar" style="background:var(--lime2)"></div><b>Entregado</b><span>Venta cerrada.</span></div>
+  </div>
+  <div style="margin-top:16px" class="grow">
+    <figure class="shot"><div class="frame" style="height:255px"><img src="img/pedidos.png" alt="Pedidos → Tablero: una columna por etapa, con totales y días en agencia" style="width:115.38%;max-width:none;height:auto;margin-left:-15.38%;margin-top:-3.37%"></div><figcaption>Pedidos → Tablero: una columna por etapa, con totales y días en agencia</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Seguimiento logístico</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">6</span>Pedidos en agencia</div>
+  <h2>Avisamos al llegar y recordamos cada mañana</h2>
+  <div class="split grow" style="grid-template-columns:1fr 1.05fr">
+    <div class="stack">
+      <div class="tl"><div class="dot"></div><div><b>Llega a la agencia</b><p>Apenas Dropi actualiza el estado, sale «Llegó a la agencia» con la dirección, el horario y el valor a pagar.</p></div></div>
+      <div class="tl"><div class="dot" style="background:var(--amber)"></div><div><b>Fuera del horario de la tienda</b><p>Si llega de noche, el aviso espera y sale al abrir el horario de envío en la mañana.</p></div></div>
+      <div class="tl"><div class="dot" style="background:var(--mint)"></div><div><b>Cada mañana, hasta que lo retire</b><p>Desde el día siguiente, un recordatorio al abrir el horario. Nunca el mismo día que el aviso de llegada.</p></div></div>
+      <div class="tl"><div class="dot" style="background:var(--red)"></div><div><b>2 días sin retirar</b><p>Alerta en la campana para que el equipo llame al cliente.</p></div></div>
+      <p style="font-size:13px;color:var(--dim);margin-top:4px">Pasadas 24 h desde el último mensaje del cliente, WhatsApp solo permite enviar con una plantilla aprobada.</p>
+    </div>
+    <figure class="shot"><div class="frame" style="height:380px"><img src="img/avisos.png" alt="Integraciones → Dropi → Avisos al cliente por WhatsApp" style="width:162.0%;max-width:none;height:auto;margin-left:-46.8%;margin-top:-17.7%"></div><figcaption>Integraciones → Dropi → Avisos al cliente por WhatsApp</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Agente logístico</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span class="n">7</span>Mientras tanto</div>
+  <h2>Lo que Selichat hace en segundo plano</h2>
+  <div class="split grow" style="grid-template-columns:.85fr 1.25fr">
+    <div class="stack">
+      <div class="mini"><span class="ico">🔁</span><div><b>Recordatorios</b><p>«¿Sigues interesado?» a quien dejó de responder, según cada producto.</p></div></div>
+      <div class="mini"><span class="ico">🧹</span><div><b>Embudo al día</b><p>Quien no responde pasa a «Perdido»; si vuelve a escribir, se reabre.</p></div></div>
+      <div class="mini"><span class="ico">🚨</span><div><b>Alertas en la campana</b><p>Novedades, agencia sin retirar, errores de subida y conexiones caídas.</p></div></div>
+      <div class="mini"><span class="ico">👥</span><div><b>El equipo interviene</b><p>Chats pasados a un asesor, pedidos en «Revisar», confirmar en Dropi y novedades.</p></div></div>
+    </div>
+    <figure class="shot"><div class="frame" style="height:380px"><img src="img/inicio.png" alt="Inicio: envíos en curso, lo que requiere atención y la campana de alertas" style="width:125.00%;max-width:none;height:auto;margin-left:-25.00%;margin-top:0"></div><figcaption>Inicio: envíos en curso, lo que requiere atención y la campana de alertas</figcaption></figure>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Automatización</span></div>
+</section>
+
+<section class="slide">
+  <div class="grow" style="display:flex;flex-direction:column;justify-content:center">
+    <div class="kicker">En resumen</div>
+    <h1 style="font-size:50px">La IA <span class="lime">vende</span>, Selichat <span class="lime">revisa</span>,<br>Dropi <span class="lime">despacha</span> y el cliente <span class="lime">siempre sabe</span> dónde está su pedido.</h1>
+    <div class="grid3" style="margin-top:34px">
+      <div class="card"><h3>WhatsApp</h3><p>Mensajes, fotos, audios y avisos al cliente.</p></div>
+      <div class="card"><h3>IA de ventas</h3><p>Conversa, resuelve dudas y cierra con todos los datos.</p></div>
+      <div class="card"><h3>Dropi + Servientrega</h3><p>Ciudades, agencias, cotización, órdenes y estados.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="brand"><i></i>Selichat</span><span>Gracias</span></div>
+</section>
+
+</div></div>
+
+<div class="nav">
+  <button id="prev" aria-label="Anterior">←</button>
+  <span class="count" id="count"></span>
+  <button id="next" aria-label="Siguiente">→</button>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  let i=Math.max(0,Math.min(slides.length-1,(parseInt(location.hash.slice(1))||1)-1));
+  const show=()=>{slides.forEach((s,k)=>s.classList.toggle('on',k===i));
+    document.getElementById('count').textContent=`${i+1} / ${slides.length}`;
+    document.getElementById('progress').style.width=`${(i+1)/slides.length*100}%`;
+    history.replaceState(null,'',`#${i+1}`);};
+  const go=d=>{i=Math.max(0,Math.min(slides.length-1,i+d));show();};
+  document.getElementById('prev').onclick=()=>go(-1);
+  document.getElementById('next').onclick=()=>go(1);
+  addEventListener('keydown',e=>{if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();go(1)}
+    if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();go(-1)}});
+  const fit=()=>{const s=Math.min(innerWidth/1300,(innerHeight-70)/740);document.getElementById('deck').style.transform=`translate(-50%,-50%) scale(${s})`;};
+  addEventListener('resize',fit);fit();show();
+</script>
+</body>
+</html>

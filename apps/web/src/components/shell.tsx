@@ -1,5 +1,5 @@
 "use client";
-import { DEFAULT_BRAND_NAME } from "@chatea/shared";
+import { DEFAULT_BRAND_NAME, ROLE_LABELS, type Role } from "@chatea/shared";
 /**
  * Marco del panel: menú lateral con íconos (agrupado, contraíble), barra superior con buscador,
  * alertas y perfil; en el celular barra y cajón.
@@ -7,8 +7,10 @@ import { DEFAULT_BRAND_NAME } from "@chatea/shared";
 import {
   AlertTriangle,
   Bell,
+  BellOff,
   Bot,
   ChevronDown,
+  CircleHelp,
   FlaskConical,
   Home,
   KanbanSquare,
@@ -16,7 +18,6 @@ import {
   type LucideIcon,
   Menu,
   MessageCircle,
-  Monitor,
   Moon,
   Package,
   PanelLeftClose,
@@ -26,6 +27,7 @@ import {
   Settings,
   ShoppingBag,
   Sun,
+  UserCircle,
   Users,
   X,
 } from "lucide-react";
@@ -36,6 +38,7 @@ import { Logo } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useBranding } from "@/lib/branding";
 import { INTEGRATIONS } from "@/lib/integrations";
+import { useBrowserNotices } from "@/lib/order-alerts";
 
 export type NavItem = {
   href: string;
@@ -73,7 +76,7 @@ export const NAV: NavGroup[] = [
       ...INTEGRATIONS.map((i) => ({
         href: i.href ?? "/panel/integraciones",
         label: i.name,
-        icon: Plug,
+        icon: i.icon,
         soon: i.href ? undefined : i.phase,
       })),
     ],
@@ -87,8 +90,10 @@ export const NAV: NavGroup[] = [
   },
 ];
 
+/** Rutas que solo se marcan activas en su propia página (no en sus subpáginas). */
+const EXACT = ["/panel", "/panel/integraciones"];
 const isActive = (pathname: string, href: string) =>
-  href === "/panel" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+  EXACT.includes(href) ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
 // ---------- Tema ----------
 
@@ -101,12 +106,25 @@ function applyTheme(t: Theme) {
     t === "oscuro" || (t === "sistema" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
 }
-function readTheme(): Theme {
-  try {
-    const t = localStorage.getItem("tema");
-    if (t === "claro" || t === "oscuro") return t;
-  } catch {}
-  return "sistema";
+/** Junto al perfil: sol en modo oscuro (pasa a claro) y luna en modo claro (pasa a oscuro). */
+function ThemeToggle() {
+  const [dark, setDark] = useState(false);
+  useEffect(() => setDark(document.documentElement.dataset.theme === "dark"), []);
+  const label = dark ? "Usar modo claro" : "Usar modo oscuro";
+  return (
+    <button
+      type="button"
+      className="btn-quiet btn-icon"
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        applyTheme(dark ? "claro" : "oscuro");
+        setDark(!dark);
+      }}
+    >
+      {dark ? <Sun /> : <Moon />}
+    </button>
+  );
 }
 
 // ---------- Contadores, alertas y estado de conexiones ----------
@@ -260,21 +278,24 @@ function initials(name: string) {
   );
 }
 
-/** Menú del usuario: tema (claro / oscuro / sistema) y cerrar sesión. */
+/** Menú del usuario: nombre, correo y rol, «Mi perfil» y cerrar sesión. */
 function UserMenu({
   user,
   onSignOut,
   topbar,
 }: {
-  user: { name?: string | null; email: string };
+  user: AppUser;
   onSignOut: () => void;
-  /** En la barra superior: botón compacto (como Whapicommerce) y el menú se abre hacia abajo. */
+  /** En la barra superior: botón compacto y el menú se abre hacia abajo. */
   topbar?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [theme, setTheme] = useState<Theme>("sistema");
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => setTheme(readTheme()), []);
+  const pathname = usePathname();
+  useEffect(() => {
+    void pathname;
+    setOpen(false);
+  }, [pathname]);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
@@ -283,11 +304,7 @@ function UserMenu({
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
-  const themes: { key: Theme; label: string; icon: LucideIcon }[] = [
-    { key: "claro", label: "Claro", icon: Sun },
-    { key: "oscuro", label: "Oscuro", icon: Moon },
-    { key: "sistema", label: "Sistema", icon: Monitor },
-  ];
+  const role = user.role ? (ROLE_LABELS[user.role as Role] ?? user.role) : null;
   return (
     <div ref={ref} className="relative">
       <button
@@ -295,13 +312,13 @@ function UserMenu({
         onClick={() => setOpen((o) => !o)}
         className={
           topbar
-            ? "flex items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            ? "flex items-center gap-2 rounded-full py-1 pr-2 pl-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             : "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"
         }
         aria-expanded={open}
         aria-label="Mi perfil"
       >
-        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-100 text-xs font-bold text-brand-800 dark:bg-brand-900 dark:text-brand-100">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-600 text-xs font-bold text-brand-ink">
           {initials(user.name || user.email)}
         </span>
         {topbar ? (
@@ -320,47 +337,47 @@ function UserMenu({
       </button>
       {open && (
         <div
-          className={`absolute z-50 w-64 rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 ${
+          className={`absolute z-50 w-64 rounded-2xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 ${
             topbar ? "top-full right-0 mt-2" : "bottom-full left-0 mb-2"
           }`}
         >
-          {topbar && (
-            <div className="border-b border-zinc-200 px-2 pt-1 pb-2 dark:border-zinc-800">
-              <div className="truncate text-sm font-medium">{user.name || "Mi cuenta"}</div>
-              <div className="truncate text-xs text-zinc-500">{user.email}</div>
-            </div>
-          )}
-          <div className="px-2 pt-1 pb-2 text-xs font-semibold text-zinc-500">Apariencia</div>
-          <div className="grid grid-cols-3 gap-1">
-            {themes.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => {
-                  setTheme(t.key);
-                  applyTheme(t.key);
-                }}
-                className={`flex flex-col items-center gap-1 rounded-xl py-2 text-xs ${
-                  theme === t.key
-                    ? "bg-brand-50 font-semibold text-brand-800 dark:bg-brand-950 dark:text-brand-200"
-                    : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                }`}
-                aria-pressed={theme === t.key}
-              >
-                <t.icon className="size-4" />
-                {t.label}
-              </button>
-            ))}
+          <div className="px-2.5 pt-2 pb-2.5">
+            <div className="truncate text-sm font-semibold">{user.name || "Mi cuenta"}</div>
+            <div className="truncate text-xs text-zinc-500">{user.email}</div>
+            {role && (
+              <span className="mt-2 inline-block rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-brand-800 uppercase dark:bg-brand-950 dark:text-brand-300">
+                {role}
+              </span>
+            )}
           </div>
-          <div className="my-2 border-t border-zinc-200 dark:border-zinc-800" />
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-          >
-            <LogOut className="size-4" />
-            Cerrar sesión
-          </button>
+          <div className="border-t border-zinc-200 py-1 dark:border-zinc-800">
+            <Link
+              href="/panel/perfil"
+              className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              <UserCircle className="size-4 text-zinc-500" />
+              Mi perfil
+            </Link>
+            <a
+              href={HELP_URL}
+              target="_blank"
+              rel="noopener"
+              className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              <CircleHelp className="size-4 text-zinc-500" />
+              Ayuda
+            </a>
+          </div>
+          <div className="border-t border-zinc-200 pt-1 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/50"
+            >
+              <LogOut className="size-4" />
+              Cerrar sesión
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -632,16 +649,19 @@ function BellMenu({ nav }: { nav: NavData | null }) {
   }, [open]);
   const alerts = alertsOf(nav);
   const urgent = alerts.some((x) => x.danger);
+  const notices = useBrowserNotices();
+  const on = notices.state === "activo";
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         className="btn-quiet btn-icon relative"
         aria-label={`Alertas${alerts.length ? ` (${alerts.length})` : ""}`}
+        title={on ? "Alertas" : "Alertas · avisos apagados en este navegador"}
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <Bell />
+        {on || notices.state === "no_soportado" ? <Bell /> : <BellOff />}
         {alerts.length > 0 && (
           <span
             className={`absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-bold ${
@@ -654,6 +674,23 @@ function BellMenu({ nav }: { nav: NavData | null }) {
       </button>
       {open && (
         <div className="absolute top-full right-0 z-50 mt-2 w-80 rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+          {notices.state !== "no_soportado" && (
+            <div className="mb-1 border-b border-zinc-200 px-2 pt-1 pb-3 dark:border-zinc-800">
+              <div className="text-sm font-semibold">Este navegador</div>
+              <p className="text-xs text-zinc-500">
+                {on
+                  ? "Te avisamos aquí cada vez que entra un pedido."
+                  : notices.state === "bloqueado"
+                    ? "El navegador bloqueó los avisos: actívalos en el candado junto a la dirección."
+                    : "Los avisos de pedidos nuevos están apagados aquí."}
+              </p>
+              {notices.state === "pedir" && (
+                <button type="button" className="btn mt-2 h-8 px-3" onClick={notices.enable}>
+                  Activar avisos
+                </button>
+              )}
+            </div>
+          )}
           <div className="px-2 pt-1 pb-2 text-xs font-semibold text-zinc-500">Alertas</div>
           {alerts.length === 0 ? (
             <p className="px-2 pb-2 text-sm text-zinc-500">Todo en orden por ahora.</p>
@@ -674,6 +711,14 @@ function BellMenu({ nav }: { nav: NavData | null }) {
               ))}
             </ul>
           )}
+          <div className="mt-1 border-t border-zinc-200 px-2 pt-2 pb-1 dark:border-zinc-800">
+            <Link
+              href="/panel/integraciones/dropi#avisos"
+              className="text-sm font-medium text-brand-700 hover:underline dark:text-brand-400"
+            >
+              Configurar avisos al cliente
+            </Link>
+          </div>
         </div>
       )}
     </div>
@@ -702,6 +747,18 @@ function ConnectionBanner({ nav }: { nav: NavData | null }) {
 
 const COMPACT_KEY = "selichat:menuCompacto";
 
+/** Ayuda: presentación del flujo de Selichat (de la IA al pedido en Dropi), en una pestaña aparte. */
+const HELP_URL = "/ayuda/flujo.html";
+
+export type ContentWidth = "full" | "lg" | "md" | "sm";
+const WIDTH_CLASS: Record<Exclude<ContentWidth, "full">, string> = {
+  lg: "max-w-5xl",
+  md: "max-w-4xl",
+  sm: "max-w-3xl",
+};
+
+export type AppUser = { name?: string | null; email: string; role?: string | null };
+
 export function AppShell({
   user,
   storeName,
@@ -709,8 +766,9 @@ export function AppShell({
   onSignOut,
   children,
   fullBleed,
+  width = "full",
 }: {
-  user: { name?: string | null; email: string };
+  user: AppUser;
   storeName: string;
   /** Selector de tienda si el usuario tiene varias. */
   storeSwitcher?: React.ReactNode;
@@ -718,8 +776,11 @@ export function AppShell({
   children: React.ReactNode;
   /** Sin márgenes (bandeja de conversaciones). */
   fullBleed?: boolean;
-  /** Antes limitaba el ancho; ahora todas las pantallas usan el ancho completo. */
-  wide?: boolean;
+  /**
+   * Ancho del contenido: «full» para tableros y listas (Inicio, Pedidos, Leads…); en pantallas
+   * de formularios o pocas tarjetas, una columna centrada que no se estira en monitores anchos.
+   */
+  width?: ContentWidth;
 }) {
   const pathname = usePathname();
   const nav = useNav();
@@ -815,6 +876,7 @@ export function AppShell({
         <Logo className="text-base" name={DEFAULT_BRAND_NAME} />
         <span className="ml-1 truncate text-sm text-zinc-500">{shopName}</span>
         <div className="ml-auto flex items-center">
+          <ThemeToggle />
           <BellMenu nav={nav} />
           <Link
             href="/panel/inbox"
@@ -878,6 +940,7 @@ export function AppShell({
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <BellMenu nav={nav} />
+            <ThemeToggle />
             <UserMenu user={user} onSignOut={onSignOut} topbar />
           </div>
         </header>
@@ -886,7 +949,13 @@ export function AppShell({
         {fullBleed ? (
           <main className="min-w-0 flex-1">{children}</main>
         ) : (
-          <main className="min-w-0 flex-1 p-4 md:p-8">{children}</main>
+          <main className="min-w-0 flex-1 p-4 md:p-8">
+            {width === "full" ? (
+              children
+            ) : (
+              <div className={`mx-auto w-full ${WIDTH_CLASS[width]}`}>{children}</div>
+            )}
+          </main>
         )}
       </div>
     </div>

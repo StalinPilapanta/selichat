@@ -8,6 +8,7 @@ import {
 } from "@chatea/shared";
 import {
   Check,
+  Globe,
   ImagePlus,
   MessageCircle,
   Palette,
@@ -41,6 +42,37 @@ const COUNTRIES = [
   { code: "AR", name: "Argentina", currency: "ARS", tz: "America/Argentina/Buenos_Aires" },
   { code: "ES", name: "España", currency: "EUR", tz: "Europe/Madrid" },
 ];
+
+/** Diferencia con UTC de una zona (p. ej. «GMT-5»). */
+function offsetOf(timeZone: string) {
+  try {
+    return (
+      new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "shortOffset" })
+        .formatToParts(new Date())
+        .find((p) => p.type === "timeZoneName")?.value ?? ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Zonas horarias para el selector: primero las de América (donde operan las tiendas) y luego
+ * el resto; la guardada se incluye aunque el navegador no la liste.
+ */
+function timezoneOptions(current: string) {
+  let all: string[] = [];
+  try {
+    all = Intl.supportedValuesOf("timeZone");
+  } catch {}
+  if (current && !all.includes(current)) all = [current, ...all];
+  const america = all.filter((z) => z.startsWith("America/"));
+  const rest = all.filter((z) => !z.startsWith("America/"));
+  return [...america, ...rest].map((z) => {
+    const off = offsetOf(z);
+    return { value: z, label: `${z.replaceAll("_", " ")}${off ? ` (${off})` : ""}` };
+  });
+}
 
 export default function Page() {
   const [s, setS] = useState<Settings | null>(null);
@@ -76,6 +108,17 @@ export default function Page() {
         description="País, moneda y horario en que los agentes pueden escribir a tus clientes."
       />
       <form onSubmit={save} className="card grid gap-4 sm:grid-cols-2">
+        <div className="flex items-start gap-3 sm:col-span-2">
+          <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
+            <Globe className="size-5" />
+          </span>
+          <div>
+            <h2 className="font-semibold">Región y horario</h2>
+            <p className="mt-0.5 text-sm text-zinc-500">
+              País y moneda de tus precios, y las horas en que la IA y los avisos pueden escribir.
+            </p>
+          </div>
+        </div>
         <div>
           <label className="label" htmlFor="country">
             País
@@ -134,12 +177,21 @@ export default function Page() {
           <label className="label" htmlFor="tz">
             Zona horaria
           </label>
-          <input
+          <select
             id="tz"
             className="input"
             value={s.timezone}
             onChange={(e) => setS({ ...s, timezone: e.target.value })}
-          />
+          >
+            {timezoneOptions(s.timezone).map((z) => (
+              <option key={z.value} value={z.value}>
+                {z.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-zinc-500">
+            Se cambia sola al elegir el país; ajústala si tu tienda opera en otra zona.
+          </p>
         </div>
         <div>
           <label className="label" htmlFor="start">
@@ -206,7 +258,7 @@ function DeleteStore() {
   }
 
   return (
-    <section className="mt-10 max-w-2xl rounded-lg border border-red-300 p-4 dark:border-red-900">
+    <section className="mt-10 rounded-2xl border border-red-300 p-5 dark:border-red-900">
       <h2 className="font-semibold text-red-700 dark:text-red-400">Eliminar tienda</h2>
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
         Borra <strong>{active.name}</strong> ({active.slug}) con todos sus productos, prompts y

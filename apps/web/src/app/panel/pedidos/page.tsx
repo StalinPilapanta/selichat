@@ -13,7 +13,6 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { type FingerprintData, FingerprintView } from "@/components/Fingerprint";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
-import { NotifyBanner } from "@/lib/order-alerts";
 
 type Customer = {
   nombre: string;
@@ -1521,7 +1520,6 @@ function OrdersPage() {
           </button>
         }
       />
-      <NotifyBanner />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="flex rounded-xl border border-zinc-200 p-0.5 dark:border-zinc-800">
           {(

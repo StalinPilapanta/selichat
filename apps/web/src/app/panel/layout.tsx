@@ -1,7 +1,21 @@
 "use client";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { AppShell } from "@/components/shell";
+import { AppShell, type ContentWidth } from "@/components/shell";
+
+/**
+ * Ancho del contenido según la pantalla: tableros y listas a todo el ancho; formularios y
+ * pantallas de pocas tarjetas, centrados (en monitores anchos no se estiran las líneas).
+ */
+function widthFor(pathname: string): ContentWidth {
+  const p = pathname.replace(/\/$/, "");
+  if (p === "/panel/integraciones" || p === "/panel/integraciones/ia") return "lg";
+  if (["/panel/integraciones/whatsapp", "/panel/configuracion", "/panel/equipo"].includes(p))
+    return "md";
+  if (p === "/panel/integraciones/dropi" || p === "/panel/perfil") return "sm";
+  return "full";
+}
+
 import {
   authClient,
   useActiveOrganization,
@@ -60,11 +74,15 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
   return (
     <BrandingProvider tenantId={active.id}>
       <AppShell
-        user={{ name: session.user.name, email: session.user.email }}
+        user={{
+          name: session.user.name,
+          email: session.user.email,
+          role: active.members?.find((m) => m.userId === session.user.id)?.role ?? null,
+        }}
         storeName={active.name}
         storeSwitcher={switcher}
         fullBleed={pathname.startsWith("/panel/inbox")}
-        wide={pathname.startsWith("/panel/leads") || pathname.startsWith("/panel/pedidos")}
+        width={widthFor(pathname)}
         onSignOut={async () => {
           await authClient.signOut();
           router.replace("/entrar");

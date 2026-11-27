@@ -12,6 +12,7 @@ import {
   renderNotice,
 } from "@chatea/shared";
 import { Truck } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
@@ -130,12 +131,17 @@ export default function DropiPage() {
 
   return (
     <>
+      <div className="mb-2 text-sm">
+        <Link href="/panel/integraciones" className="text-zinc-500 hover:underline">
+          ← Integraciones
+        </Link>
+      </div>
       <PageHeader
         icon={Truck}
         title="Dropi"
         description="Cuando el cliente confirma con la IA, el pedido se sube a Dropi y su estado vuelve aquí."
       />
-      <form onSubmit={save} className="max-w-2xl space-y-6">
+      <form onSubmit={save} className="space-y-6">
         <section className="card space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">Conexión</h2>
@@ -513,7 +519,7 @@ function AgencyFinder() {
   }
   if (!state?.available) return null;
   return (
-    <section className="card mt-6 max-w-2xl space-y-3">
+    <section className="card mt-6 space-y-3">
       <div>
         <h2 className="font-medium">Entrega y agencias Servientrega</h2>
         <p className="text-xs text-zinc-500">
@@ -614,9 +620,14 @@ function NoticesCard({
   const setEvent = (k: NoticeKind, patch: Partial<Notices["events"][NoticeKind]>) =>
     onChange({ events: { ...notices.events, [k]: { ...notices.events[k], ...patch } } });
   const active = NOTICE_KINDS.filter((k) => notices.events[k].enabled).length;
+  // Desde la campana («Configurar avisos al cliente»): la sección se pinta después de cargar.
+  useEffect(() => {
+    if (window.location.hash === "#avisos")
+      document.getElementById("avisos")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   return (
-    <section className="card space-y-3">
+    <section id="avisos" className="card scroll-mt-20 space-y-3">
       <div>
         <h2 className="font-medium">Avisos al cliente por WhatsApp (agente logístico)</h2>
         <p className="text-sm text-zinc-500">

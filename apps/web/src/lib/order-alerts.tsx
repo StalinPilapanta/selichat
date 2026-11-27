@@ -3,7 +3,6 @@
  * Aviso de escritorio cuando entra un pedido, aunque la pestaña esté de fondo.
  * El panel consulta el último pedido cada 30 s; el permiso se pide una vez por equipo.
  */
-import { Bell, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
@@ -16,7 +15,6 @@ type Latest = {
 };
 
 const seenKey = (tenantId: string) => `selichat:ultimoPedido:${tenantId}`;
-const HIDDEN_KEY = "selichat:avisoPedidosOculto";
 const supported = () => typeof window !== "undefined" && "Notification" in window;
 
 /** Se monta una vez en el panel; no dibuja nada. */
@@ -58,50 +56,30 @@ export function OrderNotifier({ tenantId }: { tenantId: string }) {
   return null;
 }
 
-/** Franja para activar los avisos en este equipo (se oculta si ya están activos). */
-export function NotifyBanner() {
-  const [state, setState] = useState<"oculto" | "pedir" | "bloqueado">("oculto");
-  useEffect(() => {
-    if (!supported() || localStorage.getItem(HIDDEN_KEY)) return;
-    const p = Notification.permission;
-    setState(p === "default" ? "pedir" : p === "denied" ? "bloqueado" : "oculto");
-  }, []);
-  if (state === "oculto") return null;
+export type NoticeState = "activo" | "pedir" | "bloqueado" | "no_soportado";
 
+/** Estado de los avisos de escritorio en este navegador, y cómo activarlos. */
+export function useBrowserNotices() {
+  const [state, setState] = useState<NoticeState>("no_soportado");
+  useEffect(() => {
+    if (!supported()) return;
+    const read = () => {
+      const p = Notification.permission;
+      setState(p === "granted" ? "activo" : p === "denied" ? "bloqueado" : "pedir");
+    };
+    read();
+    // Si se cambia el permiso desde el candado del navegador, se ve al volver a la pestaña.
+    window.addEventListener("focus", read);
+    return () => window.removeEventListener("focus", read);
+  }, []);
   const enable = async () => {
+    if (!supported()) return;
     const p = await Notification.requestPermission();
-    setState(p === "granted" ? "oculto" : p === "denied" ? "bloqueado" : "pedir");
+    setState(p === "granted" ? "activo" : p === "denied" ? "bloqueado" : "pedir");
     if (p === "granted")
       new Notification("Avisos activados", {
         body: "Te avisaremos aquí cada vez que entre un pedido.",
       });
   };
-  const hide = () => {
-    localStorage.setItem(HIDDEN_KEY, "1");
-    setState("oculto");
-  };
-
-  return (
-    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-brand-200 bg-brand-50/60 p-3 text-sm dark:border-brand-900 dark:bg-brand-950/30">
-      <span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand-600 text-brand-ink">
-        <Bell className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="font-medium">Entérate del pedido en el momento</div>
-        <div className="text-zinc-600 dark:text-zinc-400">
-          {state === "pedir"
-            ? "Te llega un aviso en cuanto entra uno, aunque tengas Selichat de fondo. Se activa en cada equipo."
-            : "El navegador bloqueó los avisos. Actívalos en el candado junto a la dirección → Notificaciones → Permitir, y recarga."}
-        </div>
-      </div>
-      {state === "pedir" && (
-        <button type="button" className="btn" onClick={enable}>
-          Activar avisos
-        </button>
-      )}
-      <button type="button" className="btn-ghost" aria-label="Ocultar este aviso" onClick={hide}>
-        <X className="size-4" />
-      </button>
-    </div>
-  );
+  return { state, enable };
 }

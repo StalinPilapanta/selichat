@@ -15,6 +15,8 @@ ENV NODE_ENV=production PORT=3100 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=build /repo/apps/web/.next/standalone ./
 COPY --from=build /repo/apps/web/.next/static ./apps/web/.next/static
+# Archivos estáticos (presentación de ayuda en /ayuda).
+COPY --from=build /repo/apps/web/public ./apps/web/public
 USER node
 EXPOSE 3100
 CMD ["node", "apps/web/server.js"]
