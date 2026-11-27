@@ -193,7 +193,7 @@ export async function buildApp(env: Env, deps: AppDeps = {}) {
   });
   await app.register(inboxRoutes, { auth, db, bus, wa, uploadDir: env.UPLOAD_DIR });
   await app.register(leadRoutes, { auth, db, bus });
-  await app.register(dashboardRoutes, { auth, db });
+  await app.register(dashboardRoutes, { auth, db, encryptionKey: env.ENCRYPTION_KEY });
   await app.register(uploadRoutes, {
     auth,
     db,

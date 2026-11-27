@@ -1251,6 +1251,14 @@ describe.skipIf(!hasDb)("pedidos y Dropi (IA confirma → Dropi → webhook)", (
     expect(d.attention.toUpload).toBe(1);
     expect(d.recent).toHaveLength(3);
     expect(d.setup).toMatchObject({ whatsapp: true, products: true, dropi: true, team: false });
+
+    // Marco del panel: contadores y estado de las conexiones sin llamar a servicios externos.
+    const nav = (await h.call(s.cookie, "GET", "/api/nav")).json();
+    expect(nav).toMatchObject({
+      unread: 0,
+      ordersAttention: 0,
+      status: { whatsapp: { state: "ok" }, dropi: { state: "ok" }, ai: { state: "off" } },
+    });
   });
 
   it("conecta con la cuenta de Dropi (MCP): OAuth, subida, huella global y estados", async () => {

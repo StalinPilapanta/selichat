@@ -8,7 +8,8 @@ import {
 } from "@chatea/shared";
 import { Package, Plus, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { type FingerprintData, FingerprintView } from "@/components/Fingerprint";
 import { ErrorText, PageHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
@@ -1136,7 +1137,16 @@ function columnTotal(list: Order[]) {
   return `${sum.toFixed(2)} ${list[0]?.currency ?? ""}`;
 }
 
-export default function OrdersPage() {
+/** useSearchParams necesita un Suspense para que la página se pueda prerenderizar. */
+export default function OrdersPageRoute() {
+  return (
+    <Suspense>
+      <OrdersPage />
+    </Suspense>
+  );
+}
+
+function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -1145,20 +1155,30 @@ export default function OrdersPage() {
   /** Etapas a mostrar cuando se llega desde el Inicio (?etapa=novedad,en_oficina). */
   const [only, setOnly] = useState<OrderStage[] | null>(null);
 
-  // Enlaces desde el Inicio y los avisos: ?etapa=…, ?pedido=…, ?nuevo=1.
+  const params = useSearchParams();
+  const router = useRouter();
+  // Enlaces desde el Inicio, la barra superior y los avisos: ?etapa=…, ?pedido=…, ?nuevo=1.
+  // Se leen en vivo: funcionan aunque ya se esté en Pedidos.
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const stages = (p.get("etapa") ?? "")
+    const stages = (params.get("etapa") ?? "")
       .split(",")
       .filter((x): x is OrderStage => x in ORDER_STAGES);
-    if (stages.length) setOnly(stages);
-    const pedido = p.get("pedido");
+    setOnly(stages.length ? stages : null);
+    const pedido = params.get("pedido");
+    const nuevo = params.get("nuevo");
     if (pedido) setOpen(pedido);
-    if (p.get("nuevo")) setCreating(true);
-  }, []);
+    if (nuevo) setCreating(true);
+    // Acciones de una sola vez: se quitan de la dirección para poder repetirlas.
+    if (pedido || nuevo) {
+      const etapa = params.get("etapa");
+      router.replace(etapa ? `/panel/pedidos?etapa=${etapa}` : "/panel/pedidos", {
+        scroll: false,
+      });
+    }
+  }, [params, router]);
   const clearFilter = () => {
     setOnly(null);
-    window.history.replaceState(null, "", "/panel/pedidos");
+    router.replace("/panel/pedidos", { scroll: false });
   };
 
   const load = useCallback(async () => {

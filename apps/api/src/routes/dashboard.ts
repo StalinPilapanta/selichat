@@ -4,9 +4,10 @@
  */
 import { type Database, schema, withTenant } from "@chatea/db";
 import { ORDER_STAGE_KEYS, type OrderStage } from "@chatea/shared";
-import { count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Auth } from "../auth.js";
+import { readDropiConfig } from "../orders/service.js";
 import { requireTenant } from "../plugins/tenant.js";
 
 const {
@@ -25,9 +26,76 @@ export const AGENCY_ALERT_DAYS = 2;
 
 const num = (v: unknown) => Number(v ?? 0) || 0;
 
-export async function dashboardRoutes(app: FastifyInstance, opts: { auth: Auth; db: Database }) {
+/** En agencia hace N días o más sin retirar (según el aviso de Dropi). */
+const agencyOverdue = sql`${orders.stage} = 'en_oficina' and coalesce((select max(e.created_at) from order_events e where e.order_id = ${orders.id} and e.stage = 'en_oficina' and e.source = 'dropi'), ${orders.updatedAt}) < now() - make_interval(days => ${AGENCY_ALERT_DAYS})`;
+
+export async function dashboardRoutes(
+  app: FastifyInstance,
+  opts: { auth: Auth; db: Database; encryptionKey: string },
+) {
   const { auth, db } = opts;
   const anyMember = requireTenant(auth, db);
+
+  /**
+   * Lo que muestra el marco del panel en cada pantalla (menú, campana y estado de las
+   * conexiones). Una sola consulta liviana: no llama a Meta, Dropi ni a la IA.
+   */
+  app.get("/api/nav", { preHandler: anyMember }, async (req) =>
+    withTenant(db, req.ctx.tenantId, async (tx) => {
+      const [[unread], [att], chans, dropiRow, [ai]] = await Promise.all([
+        tx
+          .select({ n: count() })
+          .from(conversations)
+          .where(and(eq(conversations.status, "abierta"), sql`${conversations.unreadCount} > 0`)),
+        tx
+          .select({
+            novedad: sql<number>`count(*) filter (where ${orders.stage} = 'novedad')::int`,
+            uploadErrors: sql<number>`count(*) filter (where ${orders.stage} = 'error_subida')::int`,
+            revision: sql<number>`count(*) filter (where ${orders.stage} = 'revision')::int`,
+            agencyOverdue: sql<number>`count(*) filter (where ${agencyOverdue})::int`,
+          })
+          .from(orders)
+          .where(inArray(orders.stage, ["novedad", "error_subida", "revision", "en_oficina"])),
+        tx.select({ status: channels.status, lastError: channels.lastError }).from(channels),
+        tx
+          .select({ status: integrations.status, configEnc: integrations.configEnc })
+          .from(integrations)
+          .where(eq(integrations.kind, "dropi")),
+        tx.select({ n: count() }).from(aiProviders),
+      ]);
+
+      type Conn = { state: "ok" | "error" | "off"; detail?: string };
+      const whatsapp: Conn = !chans.length
+        ? { state: "off" }
+        : chans.some((c) => c.status === "error")
+          ? { state: "error", detail: chans.find((c) => c.lastError)?.lastError ?? undefined }
+          : { state: "ok" };
+      let dropi: Conn = { state: "off" };
+      const d = dropiRow[0];
+      if (d?.status === "active") {
+        let authError: string | undefined;
+        try {
+          authError = readDropiConfig(d.configEnc, opts.encryptionKey).authError;
+        } catch {
+          authError = "No se pudo leer la conexión.";
+        }
+        dropi = authError ? { state: "error", detail: authError } : { state: "ok" };
+      }
+      const attention = {
+        novedad: num(att?.novedad),
+        agencyOverdue: num(att?.agencyOverdue),
+        uploadErrors: num(att?.uploadErrors),
+        revision: num(att?.revision),
+      };
+      return {
+        unread: num(unread?.n),
+        attention,
+        /** Pedidos que necesitan a alguien: el contador rojo de «Pedidos». */
+        ordersAttention: Object.values(attention).reduce((a, b) => a + b, 0),
+        status: { whatsapp, dropi, ai: { state: num(ai?.n) > 0 ? "ok" : "off" } as Conn },
+      };
+    }),
+  );
 
   app.get("/api/dashboard", { preHandler: anyMember }, async (req) => {
     const { tenantId } = req.ctx;
@@ -64,12 +132,7 @@ export async function dashboardRoutes(app: FastifyInstance, opts: { auth: Auth; 
           })
           .from(orders),
         // En agencia hace N días o más: Dropi registró la llegada y el cliente no retira.
-        tx
-          .select({ n: count() })
-          .from(orders)
-          .where(
-            sql`${orders.stage} = 'en_oficina' and coalesce((select max(e.created_at) from order_events e where e.order_id = ${orders.id} and e.stage = 'en_oficina' and e.source = 'dropi'), ${orders.updatedAt}) < now() - make_interval(days => ${AGENCY_ALERT_DAYS})`,
-          ),
+        tx.select({ n: count() }).from(orders).where(agencyOverdue),
         tx
           .select({ n: count() })
           .from(conversations)

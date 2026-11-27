@@ -467,7 +467,7 @@ function Inbox() {
     id === session?.user.id ? "tú" : (team.find((t) => t.id === id)?.name ?? null);
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col md:h-dvh md:flex-row">
+    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col md:flex-row">
       <aside
         className={`min-h-0 flex-col border-zinc-200 bg-white md:w-[22rem] md:border-r dark:border-zinc-800 dark:bg-zinc-900 ${
           selectedId ? "hidden md:flex" : "flex flex-1 md:flex-none"
